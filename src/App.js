@@ -250,7 +250,8 @@ function Ponto({S,C,registros,setRegistros,feriados,config,valorHora,fmt,fmtDate
     const isSp=isDomingo(dt)||isFeriadoNacional(dt)||feriados.includes(form.data);
     const c=calcDay(form.entrada,form.saida,form.intervalo,config.jornadaDiaria,valorHora,isSp);
     setPreview(c?{...c,isSpecial:isSp}:null);
-  },[form,config,valorHora,feriados]);
+  // eslint-disable-next-line
+},[]);
 
   const save=()=>{
     if(!form.entrada||!form.saida){alert("Preencha entrada e saída!");return;}
