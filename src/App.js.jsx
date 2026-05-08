@@ -260,7 +260,7 @@ function Ponto({S,C,registros,setRegistros,feriados,config,valorHora,fmt,fmtDate
     setForm(f=>({...f,entrada:"",saida:"",obs:""}));
   };
 
-  const remove=(data)=>{if(true)setRegistros(registros.filter(r=>r.data!==data));};
+  const remove=(data)=>{if(confirm("Remover este registro?"))setRegistros(registros.filter(r=>r.data!==data));};
 
   return (
     <div>
