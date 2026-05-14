@@ -498,7 +498,8 @@ function Relatorio({S,C,registrosComCalc,totals,config,valorHora,fmt,fmtDate,min
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 function Config({S,C,config,setConfig,feriados,setFeriados,jornadaSemanal,jornadaDiaria,DIAS_KEYS,DIAS_SEMANA,TEMPLATES,JORNADA_DEFAULT,minToHHMM}) {
   const [novoF,setNovoF] = useState("");
-  const [copiarDe,setCopiarDe] = useState(null);
+  // eslint-disable-next-line
+const [copiarDe,setCopiarDe] = useState(null);
   const upd = (k,v) => setConfig({...config,[k]:v});
   const updJornada = (dKey,field,value) => setConfig({...config, jornadaSemanal:{...jornadaSemanal,[dKey]:{...jornadaSemanal[dKey],[field]:value}}});
 
