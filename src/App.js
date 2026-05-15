@@ -6,7 +6,7 @@ import {
 } from "firebase/auth";
 import {
   getFirestore, doc, setDoc, getDoc, collection,
-  getDocs, deleteDoc, onSnapshot, query
+  getDocs
 } from "firebase/firestore";
 
 // ─── FIREBASE ─────────────────────────────────────────────────────────────────
@@ -186,7 +186,7 @@ export default function App() {
   const [registros,setRegistrosState]=useState([]);
   const [feriados,setFeriadosState]=useState([]);
   const [usuarios,setUsuariosState]=useState([]);
-  const [dataLoaded,setDataLoaded]=useState(false);
+  const [dataLoaded,setDataLoaded]=useState(false); // eslint-disable-next-line no-unused-vars
 
   // Persistir dark mode
   useEffect(()=>{ try{localStorage.setItem("hx_dark",JSON.stringify(dark));}catch{} },[dark]);
