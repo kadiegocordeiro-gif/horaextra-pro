@@ -368,13 +368,13 @@ function AuthFlow({dark,setDark,usuarios,setUsuarios,login,authTela,setAuthTela}
   const lbl = {fontSize:11,fontWeight:700,color:sub,marginBottom:5,display:"block",textTransform:"uppercase",letterSpacing:.7};
   const btn = {background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:"pointer",width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"inherit"};
 
-  if(authTela==="esqueci") return <EsqueciSenha {...{dark,bg,card,text,sub,border,inp,lbl,btn,usuarios,setUsuarios,setAuthTela}}/>;
-
-  // LOGIN
+  // Hooks SEMPRE no topo, antes de qualquer return condicional
   const [email,setEmail] = useState("");
   const [senha,setSenha] = useState("");
   const [erro,setErro] = useState("");
   const [loading,setLoading] = useState(false);
+
+  if(authTela==="esqueci") return <EsqueciSenha {...{dark,bg,card,text,sub,border,inp,lbl,btn,usuarios,setUsuarios,setAuthTela}}/>;
 
   const handleLogin = () => {
     setErro(""); setLoading(true);
