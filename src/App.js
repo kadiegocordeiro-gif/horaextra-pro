@@ -790,9 +790,14 @@ function Usuarios({S,C,usuarios,setUsuarios,db,auth,saveUserProfile,perfil}) {
           await saveUserProfile(editId,{mustChangePassword:true});
         }
       } else {
-        const {createUserWithEmailAndPassword} = await import("firebase/auth");
-        const secondAuth = getAuth(firebaseApp);
-        const cred = await createUserWithEmailAndPassword(secondAuth, form.email, form.senha);
+        const {createUserWithEmailAndPassword: createUser} = await import("firebase/auth");
+        const {initializeApp: initApp2} = await import("firebase/app");
+        const {getAuth: getAuth2} = await import("firebase/auth");
+        // App secundário para não deslogar o admin atual
+        const app2 = initApp2(firebaseConfig, "tmp-" + Date.now());
+        const auth2 = getAuth2(app2);
+        const cred = await createUser(auth2, form.email, form.senha);
+        await signOut(auth2);
         await saveUserProfile(cred.user.uid,{nome:form.nome,email:form.email,role:form.role,status:form.status,mustChangePassword:true,createdAt:new Date().toISOString().split("T")[0],lastLoginAt:"—"});
         // Inicializa dados padrão para o novo usuário
         await setDoc(doc(db,"userData",cred.user.uid,"data","config"),{value:JSON.stringify({salario:"",gratificacoes:"",adicionais:"",fechamentoPonto:30,fechamentoExtras:15,escala:"5x2",jornadaSemanal:{dom:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60},seg:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},ter:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},qua:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},qui:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sex:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sab:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60}}})});
