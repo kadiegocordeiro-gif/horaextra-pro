@@ -760,7 +760,7 @@ function Ponto({S,C,registros,setRegistros,feriados,config,valorHora,fmt,fmtDate
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                 <div>
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                    <span style={{fontSize:13,fontWeight:600}}>{fmtDateStr(dt)}</span>
+                    <span style={{fontSize:13,fontWeight:600}}>{fmtDateStr(r.data)}</span>
                     {noPeriodo&&<span style={{background:C.green+"22",color:C.green,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>Próx. pgto.</span>}
                     {isSp&&<span style={{background:C.red+"22",color:C.red,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>FERIADO</span>}
                     {c?.alerteLimite&&<span style={{background:C.yellow+"22",color:C.yellow,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>+2h</span>}
