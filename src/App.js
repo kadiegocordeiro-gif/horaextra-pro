@@ -186,7 +186,8 @@ export default function App() {
   const [registros,setRegistrosState]=useState([]);
   const [feriados,setFeriadosState]=useState([]);
   const [usuarios,setUsuariosState]=useState([]);
-  const [dataLoaded,setDataLoaded]=useState(false); // eslint-disable-next-line no-unused-vars
+  // eslint-disable-next-line no-unused-vars
+  const [dataLoaded,setDataLoaded]=useState(false);
 
   // Persistir dark mode
   useEffect(()=>{ try{localStorage.setItem("hx_dark",JSON.stringify(dark));}catch{} },[dark]);
