@@ -664,7 +664,7 @@ function Dashboard({S,C,proximoPagamento,historicoTotal,registrosComCalc,config,
 // ═══════════════════════════════════════════════════════════════════════════════
 // PONTO
 // ═══════════════════════════════════════════════════════════════════════════════
-function Ponto({S,C,registros,setRegistros,feriados,config,valorHora,fmt,fmtDateStr,minToHHMM,calcDay,isDomingo,isFeriadoNacional,jornadaSemanal,jornadaDiaria,DIAS_KEYS,DIAS_SEMANA,proximoPagamento}) {
+function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,minToHHMM,calcDay,isDomingo,isFeriadoNacional,jornadaSemanal,jornadaDiaria,DIAS_KEYS,DIAS_SEMANA,proximoPagamento}) {
   const today=new Date().toISOString().split("T")[0];
   const VAZIO={data:today,entrada:"",saida:"",intervalo:"60",obs:""};
   const [form,setForm]=useState(VAZIO);
@@ -792,7 +792,7 @@ function Ponto({S,C,registros,setRegistros,feriados,config,valorHora,fmt,fmtDate
 // ═══════════════════════════════════════════════════════════════════════════════
 // RELATÓRIO
 // ═══════════════════════════════════════════════════════════════════════════════
-function Relatorio({S,C,registrosComCalc,proximoPagamento,historicoTotal,config,valorHora,fmt,fmtDateStr,minToHHMM}) {
+function Relatorio({S,C,registrosComCalc,proximoPagamento,config,valorHora,fmt,fmtDateStr,minToHHMM}) {
   const sal=parseFloat(config.salario)||0;
   const totalExt=proximoPagamento.val50+proximoPagamento.val100;
   const dsr=totalExt*.1667;
