@@ -1,12 +1,31 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { initializeApp } from "firebase/app";
+import {
+  getAuth, signInWithEmailAndPassword, signOut,
+  updatePassword, onAuthStateChanged
+} from "firebase/auth";
+import {
+  getFirestore, doc, setDoc, getDoc, collection,
+  getDocs, deleteDoc, onSnapshot, query
+} from "firebase/firestore";
+
+// ─── FIREBASE ─────────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey: "AIzaSyDn1OHX9bQDG4QADyeF3uOGkX1dc6wLdJE",
+  authDomain: "horaextra-pro-919b2.firebaseapp.com",
+  projectId: "horaextra-pro-919b2",
+  storageBucket: "horaextra-pro-919b2.firebasestorage.app",
+  messagingSenderId: "636639202692",
+  appId: "1:636639202692:web:ed5e96ae1eb2ee8ec9a1d1"
+};
+const firebaseApp = initializeApp(firebaseConfig);
+const auth = getAuth(firebaseApp);
+const db = getFirestore(firebaseApp);
 
 // ─── CONSTANTES ───────────────────────────────────────────────────────────────
 const FERIADOS_NACIONAIS = ["01-01","04-21","05-01","09-07","10-12","11-02","11-15","11-20","12-25"];
 const DIAS_SEMANA = ["Domingo","Segunda","Terça","Quarta","Quinta","Sexta","Sábado"];
 const DIAS_KEYS = ["dom","seg","ter","qua","qui","sex","sab"];
-const SESSION_KEY = "hx_session";
-const SESSION_TIMEOUT = 8 * 60 * 60 * 1000; // 8h
-
 const JORNADA_DEFAULT = {
   dom:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60},
   seg:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},
@@ -16,35 +35,10 @@ const JORNADA_DEFAULT = {
   sex:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},
   sab:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60},
 };
-
 const TEMPLATES = {
   "44h/5x2":{dom:{ativo:false,entrada:"08:00",saida:"17:48",intervalo:60},seg:{ativo:true,entrada:"08:00",saida:"17:48",intervalo:60},ter:{ativo:true,entrada:"08:00",saida:"17:48",intervalo:60},qua:{ativo:true,entrada:"08:00",saida:"17:48",intervalo:60},qui:{ativo:true,entrada:"08:00",saida:"17:48",intervalo:60},sex:{ativo:true,entrada:"08:00",saida:"17:48",intervalo:60},sab:{ativo:false,entrada:"08:00",saida:"12:00",intervalo:0}},
   "44h/6x1":{dom:{ativo:false,entrada:"06:00",saida:"14:20",intervalo:60},seg:{ativo:true,entrada:"06:00",saida:"14:20",intervalo:60},ter:{ativo:true,entrada:"06:00",saida:"14:20",intervalo:60},qua:{ativo:true,entrada:"06:00",saida:"14:20",intervalo:60},qui:{ativo:true,entrada:"06:00",saida:"14:20",intervalo:60},sex:{ativo:true,entrada:"06:00",saida:"14:20",intervalo:60},sab:{ativo:true,entrada:"06:00",saida:"12:20",intervalo:20}},
   "12x36":{dom:{ativo:false,entrada:"07:00",saida:"19:00",intervalo:60},seg:{ativo:true,entrada:"07:00",saida:"19:00",intervalo:60},ter:{ativo:false,entrada:"07:00",saida:"19:00",intervalo:60},qua:{ativo:true,entrada:"07:00",saida:"19:00",intervalo:60},qui:{ativo:false,entrada:"07:00",saida:"19:00",intervalo:60},sex:{ativo:true,entrada:"07:00",saida:"19:00",intervalo:60},sab:{ativo:false,entrada:"07:00",saida:"19:00",intervalo:60}},
-};
-
-// ─── HASH SIMPLES (sem backend — usa btoa como ofuscação) ─────────────────────
-const hashPassword = (pwd) => btoa(unescape(encodeURIComponent("hxp_" + pwd)));
-const checkPassword = (pwd, hash) => hashPassword(pwd) === hash;
-
-// ─── VALIDAÇÃO DE SENHA ───────────────────────────────────────────────────────
-const validarSenha = (pwd) => {
-  const erros = [];
-  if (pwd.length < 8) erros.push("Mínimo 8 caracteres");
-  if (!/[a-zA-Z]/.test(pwd)) erros.push("Pelo menos 1 letra");
-  if (!/[0-9]/.test(pwd)) erros.push("Pelo menos 1 número");
-  return erros;
-};
-
-const forcaSenha = (pwd) => {
-  if (!pwd) return 0;
-  let f = 0;
-  if (pwd.length >= 8) f++;
-  if (pwd.length >= 12) f++;
-  if (/[a-zA-Z]/.test(pwd)) f++;
-  if (/[0-9]/.test(pwd)) f++;
-  if (/[^a-zA-Z0-9]/.test(pwd)) f++;
-  return f;
 };
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -53,17 +47,8 @@ const isDomingo = (date) => date.getDay()===0;
 const parseTime = (str) => { if(!str) return null; const [h,m]=str.split(":").map(Number); return h*60+m; };
 const minToHHMM = (min) => { const s=min<0?"-":""; const a=Math.abs(min); return `${s}${String(Math.floor(a/60)).padStart(2,"0")}:${String(a%60).padStart(2,"0")}`; };
 const fmt = (n) => n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
-const fmtDateStr = (dateStr) => new Date(dateStr+"T12:00:00").toLocaleDateString("pt-BR");
-
-const jornadaDiaria = (dia) => {
-  if(!dia||!dia.ativo) return 0;
-  const e=parseTime(dia.entrada),s=parseTime(dia.saida);
-  if(!e||!s) return 0;
-  let d=s-e-(parseInt(dia.intervalo)||0);
-  if(d<0) d+=24*60;
-  return Math.max(0,d);
-};
-
+const fmtDateStr = (dateStr) => { try { return new Date(dateStr+"T12:00:00").toLocaleDateString("pt-BR"); } catch { return dateStr; } };
+const jornadaDiaria = (dia) => { if(!dia||!dia.ativo) return 0; const e=parseTime(dia.entrada),s=parseTime(dia.saida); if(!e||!s) return 0; let d=s-e-(parseInt(dia.intervalo)||0); if(d<0) d+=24*60; return Math.max(0,d); };
 const calcDay = (entry,exit,interval,contractMin,valorHora,isSpecial) => {
   if(!entry||!exit) return null;
   const e=parseTime(entry),s=parseTime(exit),i=parseInt(interval)||0;
@@ -73,10 +58,9 @@ const calcDay = (entry,exit,interval,contractMin,valorHora,isSpecial) => {
   if(isSpecial){extra100=worked;}
   else{const over=worked-contractMin;if(over>0){extra50=over;if(over>120)alerteLimite=true;}}
   const delay=Math.max(0,contractMin-worked);
-  const val50=(extra50/60)*valorHora*1.5, val100=(extra100/60)*valorHora*2;
+  const val50=(extra50/60)*valorHora*1.5,val100=(extra100/60)*valorHora*2;
   return {worked,normal,extra50,extra100,delay,val50,val100,total:val50+val100,alerteLimite};
 };
-
 const calcularPeriodoPagamento = (fechamentoExtras) => {
   const hoje=new Date(); const diaFech=parseInt(fechamentoExtras)||15; const diaAtual=hoje.getDate();
   let inicioMes,inicioAno,fimMes,fimAno;
@@ -86,31 +70,22 @@ const calcularPeriodoPagamento = (fechamentoExtras) => {
   const fim=`${fimAno}-${String(fimMes+1).padStart(2,"0")}-${String(diaFech).padStart(2,"0")}`;
   return {inicio,fim};
 };
-
 const calcularProximoPagamento = (registrosComCalc,fechamentoExtras) => {
   const {inicio,fim}=calcularPeriodoPagamento(fechamentoExtras);
   const filtrados=registrosComCalc.filter(r=>r.data>=inicio&&r.data<=fim);
-  return filtrados.reduce((acc,r)=>{
-    if(!r.calc) return acc;
-    acc.extra50+=r.calc.extra50;acc.extra100+=r.calc.extra100;acc.val50+=r.calc.val50;acc.val100+=r.calc.val100;acc.registros.push(r);
-    return acc;
-  },{extra50:0,extra100:0,val50:0,val100:0,registros:[],inicio,fim});
+  return filtrados.reduce((acc,r)=>{if(!r.calc)return acc;acc.extra50+=r.calc.extra50;acc.extra100+=r.calc.extra100;acc.val50+=r.calc.val50;acc.val100+=r.calc.val100;acc.registros.push(r);return acc;},{extra50:0,extra100:0,val50:0,val100:0,registros:[],inicio,fim});
 };
+const calcularHistoricoTotal = (registrosComCalc) => registrosComCalc.reduce((acc,r)=>{if(!r.calc)return acc;acc.extra50+=r.calc.extra50;acc.extra100+=r.calc.extra100;acc.val50+=r.calc.val50;acc.val100+=r.calc.val100;acc.worked+=r.calc.worked;return acc;},{extra50:0,extra100:0,val50:0,val100:0,worked:0});
+const validarSenha = (pwd) => { const e=[]; if(pwd.length<8)e.push("Mínimo 8 caracteres"); if(!/[a-zA-Z]/.test(pwd))e.push("Pelo menos 1 letra"); if(!/[0-9]/.test(pwd))e.push("Pelo menos 1 número"); return e; };
+const forcaSenha = (pwd) => { if(!pwd)return 0; let f=0; if(pwd.length>=8)f++; if(pwd.length>=12)f++; if(/[a-zA-Z]/.test(pwd))f++; if(/[0-9]/.test(pwd))f++; if(/[^a-zA-Z0-9]/.test(pwd))f++; return f; };
 
-const calcularHistoricoTotal = (registrosComCalc) =>
-  registrosComCalc.reduce((acc,r)=>{
-    if(!r.calc) return acc;
-    acc.extra50+=r.calc.extra50;acc.extra100+=r.calc.extra100;acc.val50+=r.calc.val50;acc.val100+=r.calc.val100;acc.worked+=r.calc.worked;
-    return acc;
-  },{extra50:0,extra100:0,val50:0,val100:0,worked:0});
+// ─── FIREBASE HELPERS ────────────────────────────────────────────────────────
+const saveUserData = async (uid, key, data) => { try { await setDoc(doc(db,"userData",uid,"data",key),{value:JSON.stringify(data)},{merge:true}); } catch(e){console.error("Save error",e);} };
+const loadUserData = async (uid, key, def) => { try { const d=await getDoc(doc(db,"userData",uid,"data",key)); if(d.exists()) return JSON.parse(d.data().value); } catch(e){console.error("Load error",e);} return def; };
+const saveUserProfile = async (uid, profile) => { try { await setDoc(doc(db,"users",uid),profile,{merge:true}); } catch(e){console.error(e);} };
+const loadUserProfile = async (uid) => { try { const d=await getDoc(doc(db,"users",uid)); if(d.exists()) return d.data(); } catch(e){console.error(e);} return null; };
 
-const useStorage = (key,def) => {
-  const [v,setV]=useState(()=>{ try{const s=localStorage.getItem(key);return s?JSON.parse(s):def;}catch{return def;} });
-  const save=useCallback((val)=>{setV(val);try{localStorage.setItem(key,JSON.stringify(val));}catch{}},[key]);
-  return [v,save];
-};
-
-// ─── ICONS ────────────────────────────────────────────────────────────────────
+// ─── ICONS ───────────────────────────────────────────────────────────────────
 const Icon = ({name,size=20,color="currentColor"}) => {
   const p={stroke:color,strokeWidth:"2",fill:"none"};
   const icons={
@@ -124,37 +99,27 @@ const Icon = ({name,size=20,color="currentColor"}) => {
     edit:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
     sun:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
     moon:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>,
-    chevron:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><polyline points="6 9 12 15 18 9"/></svg>,
-    copy:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>,
-    lock:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>,
-    mail:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>,
     logout:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
     eye:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
     eyeOff:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>,
     key:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 11-7.778 7.778 5.5 5.5 0 017.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>,
+    chevron:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><polyline points="6 9 12 15 18 9"/></svg>,
+    copy:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>,
+    lock:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>,
+    mail:<svg width={size} height={size} viewBox="0 0 24 24" {...p}><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>,
   };
   return icons[name]||null;
 };
 
-// ─── INPUT SENHA COM TOGGLE ───────────────────────────────────────────────────
-const SenhaInput = ({value, onChange, placeholder="••••••••", style={}, label, lbl}) => {
-  const [show, setShow] = useState(false);
+// ─── COMPONENTES REUTILIZÁVEIS ────────────────────────────────────────────────
+const SenhaInput = ({value,onChange,placeholder="••••••••",style={},label,lbl}) => {
+  const [show,setShow]=useState(false);
   return (
     <div style={{marginBottom:12}}>
-      {label && <label style={lbl}>{label}</label>}
+      {label&&<label style={lbl}>{label}</label>}
       <div style={{position:"relative"}}>
-        <input
-          type={show?"text":"password"}
-          value={value}
-          onChange={onChange}
-          placeholder={placeholder}
-          style={{...style,paddingRight:44}}
-        />
-        <button
-          type="button"
-          onClick={()=>setShow(!show)}
-          style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",padding:4,display:"flex",alignItems:"center",opacity:.6}}
-        >
+        <input type={show?"text":"password"} value={value} onChange={onChange} placeholder={placeholder} style={{...style,paddingRight:44}}/>
+        <button type="button" onClick={()=>setShow(!show)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",padding:4,display:"flex",alignItems:"center",opacity:.6}}>
           <Icon name={show?"eyeOff":"eye"} size={18} color="#64748b"/>
         </button>
       </div>
@@ -162,18 +127,15 @@ const SenhaInput = ({value, onChange, placeholder="••••••••", st
   );
 };
 
-// ─── BARRA DE FORÇA DE SENHA ──────────────────────────────────────────────────
 const ForcaSenhaBar = ({pwd}) => {
-  const f = forcaSenha(pwd);
-  const cores = ["#ef4444","#f59e0b","#f59e0b","#10b981","#10b981"];
-  const labels = ["","Fraca","Razoável","Boa","Forte"];
-  if (!pwd) return null;
+  const f=forcaSenha(pwd);
+  const cores=["#ef4444","#f59e0b","#f59e0b","#10b981","#10b981"];
+  const labels=["","Fraca","Razoável","Boa","Forte"];
+  if(!pwd) return null;
   return (
     <div style={{marginBottom:12}}>
       <div style={{display:"flex",gap:4,marginBottom:4}}>
-        {[1,2,3,4].map(i=>(
-          <div key={i} style={{flex:1,height:4,borderRadius:2,background:f>=i?(cores[f-1]):"#e2e8f0",transition:"background .3s"}}/>
-        ))}
+        {[1,2,3,4].map(i=><div key={i} style={{flex:1,height:4,borderRadius:2,background:f>=i?cores[f-1]:"#e2e8f0",transition:"background .3s"}}/>)}
       </div>
       <div style={{fontSize:11,color:cores[f-1]||"#94a3b8",fontWeight:600}}>{labels[f]||""}</div>
     </div>
@@ -197,73 +159,94 @@ const BarChart = ({data,textColor}) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// LOADING SCREEN
+// ═══════════════════════════════════════════════════════════════════════════════
+const LoadingScreen = ({dark}) => (
+  <div style={{minHeight:"100vh",background:dark?"#0f172a":"#f1f5f9",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",fontFamily:"inherit"}}>
+    <div style={{width:64,height:64,borderRadius:20,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",marginBottom:16,boxShadow:"0 8px 32px rgba(99,102,241,.4)"}}>
+      <Icon name="lock" size={28} color="#fff"/>
+    </div>
+    <div style={{fontSize:18,fontWeight:700,color:dark?"#f1f5f9":"#0f172a"}}>HoraExtra Pro</div>
+    <div style={{fontSize:13,color:dark?"#94a3b8":"#64748b",marginTop:8}}>Carregando...</div>
+    <div style={{marginTop:20,width:40,height:40,border:"3px solid #6366f1",borderTopColor:"transparent",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+    <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+  </div>
+);
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // APP PRINCIPAL
 // ═══════════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [dark,setDark] = useStorage("hx_dark",false);
-  const [tab,setTab] = useState("dashboard");
-  const [config,setConfig] = useStorage("hx_config",{
-    salario:"",gratificacoes:"",adicionais:"",
-    fechamentoPonto:30,fechamentoExtras:15,
-    escala:"5x2",jornadaSemanal:JORNADA_DEFAULT,
-  });
-  const [registros,setRegistros] = useStorage("hx_registros",[]);
-  const [feriados,setFeriados] = useStorage("hx_feriados",[]);
+  const [dark,setDark]=useState(()=>{ try{return JSON.parse(localStorage.getItem("hx_dark"))||false;}catch{return false;} });
+  const [tab,setTab]=useState("dashboard");
+  const [authState,setAuthState]=useState("loading"); // loading | login | trocar | app
+  const [fireUser,setFireUser]=useState(null); // Firebase Auth user
+  const [perfil,setPerfil]=useState(null); // Firestore user profile
+  const [config,setConfigState]=useState({salario:"",gratificacoes:"",adicionais:"",fechamentoPonto:30,fechamentoExtras:15,escala:"5x2",jornadaSemanal:JORNADA_DEFAULT});
+  const [registros,setRegistrosState]=useState([]);
+  const [feriados,setFeriadosState]=useState([]);
+  const [usuarios,setUsuariosState]=useState([]);
+  const [dataLoaded,setDataLoaded]=useState(false);
 
-  // USUÁRIOS — admin padrão criado automaticamente
-  const [usuarios,setUsuarios] = useStorage("hx_usuarios",[{
-    id:1, nome:"Administrador", email:"admin@horaextra.app",
-    passwordHash: hashPassword("Admin@123"),
-    perfil:"admin", status:"ativo",
-    mustChangePassword:false,
-    createdAt: new Date().toISOString().split("T")[0],
-    lastLoginAt:"—"
-  }]);
+  // Persistir dark mode
+  useEffect(()=>{ try{localStorage.setItem("hx_dark",JSON.stringify(dark));}catch{} },[dark]);
 
-  // SESSÃO
-  const [sessao,setSessao] = useState(()=>{
-    try {
-      const s = JSON.parse(localStorage.getItem(SESSION_KEY));
-      if(s && Date.now()-s.loginAt < SESSION_TIMEOUT) return s;
-    } catch {}
-    return null;
-  });
+  // ── Auth state listener ──────────────────────────────────────────────────
+  useEffect(()=>{
+    const unsub = onAuthStateChanged(auth, async (user)=>{
+      if(user){
+        setFireUser(user);
+        const p = await loadUserProfile(user.uid);
+        if(p){
+          setPerfil(p);
+          // Carrega dados do usuário
+          const [cfg,regs,fers] = await Promise.all([
+            loadUserData(user.uid,"config",{salario:"",gratificacoes:"",adicionais:"",fechamentoPonto:30,fechamentoExtras:15,escala:"5x2",jornadaSemanal:JORNADA_DEFAULT}),
+            loadUserData(user.uid,"registros",[]),
+            loadUserData(user.uid,"feriados",[]),
+          ]);
+          setConfigState(cfg);
+          setRegistrosState(regs);
+          setFeriadosState(fers);
+          setDataLoaded(true);
+          if(p.mustChangePassword){ setAuthState("trocar"); }
+          else { setAuthState("app"); }
+        } else {
+          // Perfil não encontrado — logout
+          await signOut(auth);
+          setAuthState("login");
+        }
+      } else {
+        setFireUser(null); setPerfil(null); setAuthState("login");
+      }
+    });
+    return ()=>unsub();
+  },[]);
 
-  // TELA AUTH: "login" | "esqueci" | "trocar"
-  const [authTela,setAuthTela] = useState("login");
+  // ── Carregar lista de usuários (só admin) ────────────────────────────────
+  useEffect(()=>{
+    if(!fireUser||perfil?.role!=="admin") return;
+    const loadUsers = async () => {
+      const snap = await getDocs(collection(db,"users"));
+      const list = snap.docs.map(d=>({...d.data(),uid:d.id}));
+      setUsuariosState(list);
+    };
+    loadUsers();
+  },[fireUser,perfil]);
 
-  const login = (usuario) => {
-    const sess = {userId:usuario.id, email:usuario.email, nome:usuario.nome, perfil:usuario.perfil, loginAt:Date.now()};
-    setSessao(sess);
-    localStorage.setItem(SESSION_KEY,JSON.stringify(sess));
-    // atualiza lastLoginAt
-    setUsuarios(prev=>prev.map(u=>u.id===usuario.id?{...u,lastLoginAt:new Date().toISOString().split("T")[0]}:u));
-  };
+  // ── Wrappers para salvar no Firestore ────────────────────────────────────
+  const setConfig = useCallback(async (val)=>{ setConfigState(val); if(fireUser) await saveUserData(fireUser.uid,"config",val); },[fireUser]);
+  const setRegistros = useCallback(async (val)=>{ setRegistrosState(val); if(fireUser) await saveUserData(fireUser.uid,"registros",val); },[fireUser]);
+  const setFeriados = useCallback(async (val)=>{ setFeriadosState(val); if(fireUser) await saveUserData(fireUser.uid,"feriados",val); },[fireUser]);
+  const setUsuarios = useCallback((val)=>{ setUsuariosState(val); },[]);
 
-  const logout = () => {
-    setSessao(null);
-    localStorage.removeItem(SESSION_KEY);
-    setAuthTela("login");
-    setTab("dashboard");
-  };
+  const logout = async () => { await signOut(auth); setAuthState("login"); setTab("dashboard"); setDataLoaded(false); };
 
-  const usuarioAtual = sessao ? usuarios.find(u=>u.id===sessao.userId) : null;
-
-  // Se não autenticado → telas de auth
-  if (!sessao || !usuarioAtual) {
-    return <AuthFlow dark={dark} setDark={setDark} usuarios={usuarios} setUsuarios={setUsuarios} login={login} authTela={authTela} setAuthTela={setAuthTela}/>;
-  }
-
-  // Troca de senha obrigatória
-  if (usuarioAtual.mustChangePassword) {
-    return <TrocarSenhaObrigatoria dark={dark} usuario={usuarioAtual} usuarios={usuarios} setUsuarios={setUsuarios} logout={logout}/>;
-  }
-
-  // App normal
+  // ── Computed values ──────────────────────────────────────────────────────
   const jornadaSemanal = config.jornadaSemanal||JORNADA_DEFAULT;
   const baseCalculo = (parseFloat(config.salario)||0)+(parseFloat(config.gratificacoes)||0);
   const totalMinSemana = DIAS_KEYS.reduce((acc,k)=>acc+jornadaDiaria(jornadaSemanal[k]),0);
-  const valorHora = totalMinSemana>0 ? baseCalculo/((totalMinSemana*(52/12))/60) : 0;
+  const valorHora = totalMinSemana>0?baseCalculo/((totalMinSemana*(52/12))/60):0;
 
   const registrosComCalc = registros.map(r=>{
     const dt=new Date(r.data+"T12:00:00");
@@ -277,13 +260,14 @@ export default function App() {
   const proximoPagamento = calcularProximoPagamento(registrosComCalc,config.fechamentoExtras);
   const historicoTotal = calcularHistoricoTotal(registrosComCalc);
 
-  const C = {
-    bg:dark?"#0f172a":"#f1f5f9",card:dark?"#1e293b":"#ffffff",
-    text:dark?"#f1f5f9":"#0f172a",sub:dark?"#94a3b8":"#64748b",
-    border:dark?"#334155":"#e2e8f0",input:dark?"#334155":"#f8fafc",
-    accent:"#6366f1",green:"#10b981",yellow:"#f59e0b",red:"#ef4444",purple:"#8b5cf6"
-  };
-  const S = {
+  // ── Telas ─────────────────────────────────────────────────────────────────
+  if(authState==="loading") return <LoadingScreen dark={dark}/>;
+  if(authState==="login") return <LoginScreen dark={dark} setDark={setDark} auth={auth} db={db} setAuthState={setAuthState} setPerfil={setPerfil} setFireUser={setFireUser} loadUserProfile={loadUserProfile} loadUserData={loadUserData} setConfigState={setConfigState} setRegistrosState={setRegistrosState} setFeriadosState={setFeriadosState} setDataLoaded={setDataLoaded}/>;
+  if(authState==="trocar") return <TrocarSenha dark={dark} auth={auth} fireUser={fireUser} perfil={perfil} setPerfil={setPerfil} db={db} setAuthState={setAuthState} logout={logout} saveUserProfile={saveUserProfile}/>;
+
+  // ── App ───────────────────────────────────────────────────────────────────
+  const C={bg:dark?"#0f172a":"#f1f5f9",card:dark?"#1e293b":"#ffffff",text:dark?"#f1f5f9":"#0f172a",sub:dark?"#94a3b8":"#64748b",border:dark?"#334155":"#e2e8f0",input:dark?"#334155":"#f8fafc",accent:"#6366f1",green:"#10b981",yellow:"#f59e0b",red:"#ef4444",purple:"#8b5cf6"};
+  const S={
     wrap:{minHeight:"100vh",background:C.bg,fontFamily:"'Inter','Segoe UI',system-ui,sans-serif",color:C.text,maxWidth:430,margin:"0 auto",paddingBottom:84,transition:"background .3s,color .3s"},
     card:{background:C.card,borderRadius:16,padding:16,marginBottom:12,border:`1px solid ${C.border}`,boxShadow:dark?"0 4px 24px rgba(0,0,0,.35)":"0 2px 12px rgba(0,0,0,.07)"},
     inp:{background:C.input,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"10px 14px",color:C.text,fontSize:15,width:"100%",outline:"none",boxSizing:"border-box",fontFamily:"inherit"},
@@ -294,25 +278,20 @@ export default function App() {
     navBtn:(a)=>({flex:1,padding:"10px 4px 8px",display:"flex",flexDirection:"column",alignItems:"center",gap:3,cursor:"pointer",color:a?C.accent:C.sub,fontSize:10,fontWeight:a?700:500,background:"none",border:"none",fontFamily:"inherit",transition:"color .2s"}),
   };
 
-  const props={S,C,dark,config,setConfig,registros,setRegistros,feriados,setFeriados,usuarios,setUsuarios,usuarioAtual,valorHora,registrosComCalc,proximoPagamento,historicoTotal,fmt,fmtDateStr,minToHHMM,calcDay,isDomingo,isFeriadoNacional,jornadaSemanal,jornadaDiaria,DIAS_KEYS,DIAS_SEMANA,TEMPLATES,JORNADA_DEFAULT,logout};
+  const props={S,C,dark,config,setConfig,registros:registrosComCalc.map(r=>({...r})),setRegistros,feriados,setFeriados,usuarios,setUsuarios,perfil,fireUser,valorHora,registrosComCalc,proximoPagamento,historicoTotal,fmt,fmtDateStr,minToHHMM,calcDay,isDomingo,isFeriadoNacional,jornadaSemanal,jornadaDiaria,DIAS_KEYS,DIAS_SEMANA,TEMPLATES,logout,db,auth,saveUserProfile,loadUserData,saveUserData};
 
   return (
     <div style={S.wrap}>
-      {/* HEADER */}
       <div style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",padding:"20px 20px 28px",borderRadius:"0 0 28px 28px",marginBottom:16}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
           <div>
             <div style={{fontSize:10,color:"rgba(255,255,255,.65)",fontWeight:700,letterSpacing:2,textTransform:"uppercase"}}>HoraExtra Pro • CLT</div>
             <div style={{fontSize:22,fontWeight:800,color:"#fff",marginTop:2,letterSpacing:"-.5px"}}>Minha Jornada</div>
-            <div style={{fontSize:11,color:"rgba(255,255,255,.65)",marginTop:1}}>Olá, {usuarioAtual.nome.split(" ")[0]} 👋</div>
+            <div style={{fontSize:11,color:"rgba(255,255,255,.65)",marginTop:1}}>Olá, {perfil?.nome?.split(" ")[0]} 👋</div>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>setDark(!dark)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:10,padding:9,cursor:"pointer"}}>
-              <Icon name={dark?"sun":"moon"} size={18} color="#fff"/>
-            </button>
-            <button onClick={logout} title="Sair" style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:10,padding:9,cursor:"pointer"}}>
-              <Icon name="logout" size={18} color="#fff"/>
-            </button>
+            <button onClick={()=>setDark(!dark)} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:10,padding:9,cursor:"pointer"}}><Icon name={dark?"sun":"moon"} size={18} color="#fff"/></button>
+            <button onClick={logout} style={{background:"rgba(255,255,255,.15)",border:"none",borderRadius:10,padding:9,cursor:"pointer"}}><Icon name="logout" size={18} color="#fff"/></button>
           </div>
         </div>
         <div style={{display:"flex",gap:10,marginTop:18}}>
@@ -334,20 +313,13 @@ export default function App() {
         {tab==="ponto"&&<Ponto {...props}/>}
         {tab==="relatorio"&&<Relatorio {...props}/>}
         {tab==="config"&&<Config {...props}/>}
-        {tab==="usuarios"&&usuarioAtual.perfil==="admin"&&<Usuarios {...props}/>}
-        {tab==="usuarios"&&usuarioAtual.perfil!=="admin"&&(
-          <div style={{...S.card,textAlign:"center",padding:32}}>
-            <div style={{fontSize:32,marginBottom:8}}>🔒</div>
-            <div style={{color:C.sub}}>Acesso restrito a administradores.</div>
-          </div>
-        )}
+        {tab==="usuarios"&&(perfil?.role==="admin"?<Usuarios {...props}/>:<div style={{...S.card,textAlign:"center",padding:32}}><div style={{fontSize:32,marginBottom:8}}>🔒</div><div style={{color:C.sub}}>Acesso restrito a administradores.</div></div>)}
       </div>
 
       <div style={S.nav}>
         {[["dashboard","home","Início"],["ponto","plus","Registrar"],["relatorio","chart","Relatório"],["config","settings","Config"],["usuarios","users","Usuários"]].map(([id,icon,lbl])=>(
           <button key={id} style={S.navBtn(tab===id)} onClick={()=>setTab(id)}>
-            <Icon name={icon} size={tab===id?22:19}/>
-            <span>{lbl}</span>
+            <Icon name={icon} size={tab===id?22:19}/><span>{lbl}</span>
           </button>
         ))}
       </div>
@@ -356,200 +328,130 @@ export default function App() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TELAS DE AUTENTICAÇÃO
+// LOGIN
 // ═══════════════════════════════════════════════════════════════════════════════
-function AuthFlow({dark,setDark,usuarios,setUsuarios,login,authTela,setAuthTela}) {
-  const bg = dark?"#0f172a":"#f1f5f9";
-  const card = dark?"#1e293b":"#ffffff";
-  const text = dark?"#f1f5f9":"#0f172a";
-  const sub = dark?"#94a3b8":"#64748b";
-  const border = dark?"#334155":"#e2e8f0";
-  const inp = {background:dark?"#334155":"#f8fafc",border:`1.5px solid ${border}`,borderRadius:10,padding:"12px 14px",color:text,fontSize:15,width:"100%",outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
-  const lbl = {fontSize:11,fontWeight:700,color:sub,marginBottom:5,display:"block",textTransform:"uppercase",letterSpacing:.7};
-  const btn = {background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:"pointer",width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:8,fontFamily:"inherit"};
+function LoginScreen({dark,setDark,auth,db,setAuthState,setPerfil,setFireUser,loadUserProfile,loadUserData,setConfigState,setRegistrosState,setFeriadosState,setDataLoaded}) {
+  const bg=dark?"#0f172a":"#f1f5f9"; const card=dark?"#1e293b":"#fff"; const text=dark?"#f1f5f9":"#0f172a"; const sub=dark?"#94a3b8":"#64748b"; const border=dark?"#334155":"#e2e8f0";
+  const inp={background:dark?"#334155":"#f8fafc",border:`1.5px solid ${border}`,borderRadius:10,padding:"12px 14px",color:text,fontSize:15,width:"100%",outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
+  const lbl={fontSize:11,fontWeight:700,color:sub,marginBottom:5,display:"block",textTransform:"uppercase",letterSpacing:.7};
+  const [email,setEmail]=useState(""); const [senha,setSenha]=useState(""); const [erro,setErro]=useState(""); const [loading,setLoading]=useState(false);
+  const [esqueciTela,setEsqueciTela]=useState(false); const [esqueciEmail,setEsqueciEmail]=useState(""); const [esqueciMsg,setEsqueciMsg]=useState("");
 
-  // Hooks SEMPRE no topo, antes de qualquer return condicional
-  const [email,setEmail] = useState("");
-  const [senha,setSenha] = useState("");
-  const [erro,setErro] = useState("");
-  const [loading,setLoading] = useState(false);
-
-  if(authTela==="esqueci") return <EsqueciSenha {...{dark,bg,card,text,sub,border,inp,lbl,btn,usuarios,setUsuarios,setAuthTela}}/>;
-
-  const handleLogin = () => {
+  const handleLogin = async () => {
     setErro(""); setLoading(true);
-    setTimeout(()=>{
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, senha);
+      const p = await loadUserProfile(cred.user.uid);
+      if(!p){ setErro("Perfil não encontrado. Contate o administrador."); await signOut(auth); setLoading(false); return; }
+      if(p.status==="inativo"){ setErro("Seu acesso está desativado. Entre em contato com o administrador."); await signOut(auth); setLoading(false); return; }
+      setPerfil(p); setFireUser(cred.user);
+      const [cfg,regs,fers] = await Promise.all([
+        loadUserData(cred.user.uid,"config",{salario:"",gratificacoes:"",adicionais:"",fechamentoPonto:30,fechamentoExtras:15,escala:"5x2",jornadaSemanal:{dom:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60},seg:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},ter:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},qua:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},qui:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sex:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sab:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60}}}),
+        loadUserData(cred.user.uid,"registros",[]),
+        loadUserData(cred.user.uid,"feriados",[]),
+      ]);
+      setConfigState(cfg); setRegistrosState(regs); setFeriadosState(fers); setDataLoaded(true);
+      await setDoc(doc(db,"users",cred.user.uid),{lastLoginAt:new Date().toISOString().split("T")[0]},{merge:true});
+      if(p.mustChangePassword){ setAuthState("trocar"); } else { setAuthState("app"); }
+    } catch(e) {
       setLoading(false);
-      const u = usuarios.find(u=>u.email.toLowerCase()===email.toLowerCase());
-      if(!u||!checkPassword(senha,u.passwordHash)){setErro("E-mail ou senha incorretos.");return;}
-      if(u.status==="inativo"){setErro("Seu acesso está desativado. Entre em contato com o administrador.");return;}
-      login(u);
-    },600);
+      if(e.code==="auth/user-not-found"||e.code==="auth/wrong-password"||e.code==="auth/invalid-credential") setErro("E-mail ou senha incorretos.");
+      else setErro("Erro ao entrar. Tente novamente.");
+    }
   };
+
+  if(esqueciTela) return (
+    <div style={{minHeight:"100vh",background:bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter','Segoe UI',system-ui,sans-serif"}}>
+      <div style={{width:"100%",maxWidth:380}}>
+        <div style={{textAlign:"center",marginBottom:24}}>
+          <div style={{width:56,height:56,borderRadius:16,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}><Icon name="key" size={24} color="#fff"/></div>
+          <div style={{fontSize:20,fontWeight:800,color:text}}>Recuperar senha</div>
+          <div style={{fontSize:13,color:sub,marginTop:4}}>Informe seu e-mail cadastrado</div>
+        </div>
+        <div style={{background:card,borderRadius:20,padding:24,border:`1px solid ${border}`}}>
+          <div style={{marginBottom:16}}><label style={lbl}>E-mail</label><input type="email" value={esqueciEmail} onChange={e=>setEsqueciEmail(e.target.value)} placeholder="seu@email.com" style={inp}/></div>
+          {esqueciMsg&&<div style={{background:esqueciMsg.includes("✅")?"#10b98115":"#ef444415",borderRadius:10,padding:"10px 14px",fontSize:13,color:esqueciMsg.includes("✅")?"#10b981":"#ef4444",marginBottom:14}}>{esqueciMsg}</div>}
+          <button onClick={async()=>{
+            if(!esqueciEmail){setEsqueciMsg("Informe o e-mail.");return;}
+            try{
+              const {sendPasswordResetEmail}=await import("firebase/auth");
+              await sendPasswordResetEmail(auth,esqueciEmail);
+              setEsqueciMsg("✅ E-mail de redefinição enviado! Verifique sua caixa de entrada.");
+            }catch(e){ setEsqueciMsg("E-mail não encontrado ou erro ao enviar."); }
+          }} style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:700,cursor:"pointer",width:"100%",fontFamily:"inherit",marginBottom:12}}>Enviar e-mail de redefinição</button>
+          <button onClick={()=>setEsqueciTela(false)} style={{background:"none",border:"none",color:"#6366f1",fontSize:13,cursor:"pointer",width:"100%",fontFamily:"inherit",fontWeight:600}}>← Voltar ao login</button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div style={{minHeight:"100vh",background:bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter','Segoe UI',system-ui,sans-serif"}}>
       <div style={{width:"100%",maxWidth:380}}>
-        {/* Logo */}
         <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{width:64,height:64,borderRadius:20,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px",boxShadow:"0 8px 32px rgba(99,102,241,.4)"}}>
-            <Icon name="lock" size={28} color="#fff"/>
-          </div>
+          <div style={{width:64,height:64,borderRadius:20,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px",boxShadow:"0 8px 32px rgba(99,102,241,.4)"}}><Icon name="lock" size={28} color="#fff"/></div>
           <div style={{fontSize:24,fontWeight:800,color:text,letterSpacing:"-.5px"}}>HoraExtra Pro</div>
           <div style={{fontSize:13,color:sub,marginTop:4}}>Acesse sua conta para continuar</div>
         </div>
-
-        {/* Card login */}
         <div style={{background:card,borderRadius:20,padding:24,border:`1px solid ${border}`,boxShadow:dark?"0 8px 32px rgba(0,0,0,.4)":"0 4px 24px rgba(0,0,0,.08)"}}>
-          <div style={{marginBottom:16}}>
-            <label style={lbl}>E-mail</label>
-            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="seu@email.com" style={inp}/>
-          </div>
+          <div style={{marginBottom:16}}><label style={lbl}>E-mail</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==="Enter"&&handleLogin()} placeholder="seu@email.com" style={inp}/></div>
           <SenhaInput value={senha} onChange={e=>setSenha(e.target.value)} label="Senha" lbl={lbl} style={inp}/>
-
-          {erro && (
-            <div style={{background:"#ef444415",border:"1px solid #ef444433",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#ef4444",marginBottom:14,fontWeight:500}}>
-              ⚠️ {erro}
-            </div>
-          )}
-
-          <button onClick={handleLogin} disabled={loading} style={{...btn,opacity:loading?.7:1,marginBottom:14}}>
+          {erro&&<div style={{background:"#ef444415",border:"1px solid #ef444433",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#ef4444",marginBottom:14,fontWeight:500}}>⚠️ {erro}</div>}
+          <button onClick={handleLogin} disabled={loading} style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:16,fontWeight:700,cursor:"pointer",width:"100%",fontFamily:"inherit",marginBottom:14,opacity:loading?.7:1}}>
             {loading?"Verificando...":"Entrar"}
           </button>
-
-          <button onClick={()=>setAuthTela("esqueci")} style={{background:"none",border:"none",color:"#6366f1",fontSize:13,cursor:"pointer",width:"100%",textAlign:"center",fontFamily:"inherit",fontWeight:600}}>
-            Esqueci minha senha
-          </button>
+          <button onClick={()=>setEsqueciTela(true)} style={{background:"none",border:"none",color:"#6366f1",fontSize:13,cursor:"pointer",width:"100%",textAlign:"center",fontFamily:"inherit",fontWeight:600}}>Esqueci minha senha</button>
         </div>
-
-        <div style={{textAlign:"center",marginTop:16,fontSize:11,color:sub}}>
-          Acesso padrão: admin@horaextra.app / Admin@123
-        </div>
-
         <button onClick={()=>setDark(!dark)} style={{background:"none",border:`1px solid ${border}`,borderRadius:10,padding:"8px 16px",cursor:"pointer",color:sub,fontSize:12,display:"flex",alignItems:"center",gap:6,margin:"16px auto 0",fontFamily:"inherit"}}>
-          <Icon name={dark?"sun":"moon"} size={14} color={sub}/> {dark?"Modo claro":"Modo escuro"}
+          <Icon name={dark?"sun":"moon"} size={14} color={sub}/>{dark?"Modo claro":"Modo escuro"}
         </button>
       </div>
     </div>
   );
 }
 
-function EsqueciSenha({dark,bg,card,text,sub,border,inp,lbl,btn,usuarios,setUsuarios,setAuthTela}) {
-  const [etapa,setEtapa] = useState("email"); // email | nova
-  const [email,setEmail] = useState("");
-  const [nova,setNova] = useState("");
-  const [confirma,setConfirma] = useState("");
-  const [erro,setErro] = useState("");
-  const [ok,setOk] = useState(false);
-
-  const verificarEmail = () => {
-    const u = usuarios.find(u=>u.email.toLowerCase()===email.toLowerCase());
-    if(!u){setErro("E-mail não encontrado.");return;}
-    if(u.status==="inativo"){setErro("Conta desativada. Contate o administrador.");return;}
-    setErro(""); setEtapa("nova");
-  };
-
-  const salvarNova = () => {
-    const erros = validarSenha(nova);
-    if(erros.length>0){setErro(erros[0]);return;}
-    if(nova!==confirma){setErro("As senhas não conferem.");return;}
-    setUsuarios(prev=>prev.map(u=>u.email.toLowerCase()===email.toLowerCase()?{...u,passwordHash:hashPassword(nova),mustChangePassword:false}:u));
-    setOk(true);
-    setTimeout(()=>setAuthTela("login"),2000);
-  };
-
-  if(ok) return (
-    <div style={{minHeight:"100vh",background:bg,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit"}}>
-      <div style={{textAlign:"center",padding:32}}>
-        <div style={{fontSize:48,marginBottom:12}}>✅</div>
-        <div style={{fontSize:18,fontWeight:700,color:text}}>Senha atualizada!</div>
-        <div style={{fontSize:13,color:sub,marginTop:4}}>Redirecionando para o login...</div>
-      </div>
-    </div>
-  );
-
-  return (
-    <div style={{minHeight:"100vh",background:bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter','Segoe UI',system-ui,sans-serif"}}>
-      <div style={{width:"100%",maxWidth:380}}>
-        <div style={{textAlign:"center",marginBottom:24}}>
-          <div style={{width:56,height:56,borderRadius:16,background:"linear-gradient(135deg,#6366f1,#8b5cf6)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}>
-            <Icon name="key" size={24} color="#fff"/>
-          </div>
-          <div style={{fontSize:20,fontWeight:800,color:text}}>Recuperar senha</div>
-          <div style={{fontSize:13,color:sub,marginTop:4}}>{etapa==="email"?"Informe seu e-mail cadastrado":"Crie sua nova senha"}</div>
-        </div>
-
-        <div style={{background:card,borderRadius:20,padding:24,border:`1px solid ${border}`,boxShadow:"0 4px 24px rgba(0,0,0,.08)"}}>
-          {etapa==="email"?(
-            <>
-              <div style={{marginBottom:16}}>
-                <label style={lbl}>E-mail cadastrado</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="seu@email.com" style={inp}/>
-              </div>
-              {erro&&<div style={{background:"#ef444415",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#ef4444",marginBottom:14}}>⚠️ {erro}</div>}
-              <button onClick={verificarEmail} style={btn}>Continuar</button>
-            </>
-          ):(
-            <>
-              <SenhaInput value={nova} onChange={e=>setNova(e.target.value)} label="Nova senha" lbl={lbl} style={inp}/>
-              <ForcaSenhaBar pwd={nova}/>
-              <SenhaInput value={confirma} onChange={e=>setConfirma(e.target.value)} label="Confirmar nova senha" lbl={lbl} style={inp}/>
-              {erro&&<div style={{background:"#ef444415",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#ef4444",marginBottom:14}}>⚠️ {erro}</div>}
-              <button onClick={salvarNova} style={btn}>Salvar nova senha</button>
-            </>
-          )}
-          <button onClick={()=>setAuthTela("login")} style={{background:"none",border:"none",color:"#6366f1",fontSize:13,cursor:"pointer",width:"100%",textAlign:"center",fontFamily:"inherit",fontWeight:600,marginTop:14}}>
-            ← Voltar ao login
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TrocarSenhaObrigatoria({dark,usuario,usuarios,setUsuarios,logout}) {
+// ═══════════════════════════════════════════════════════════════════════════════
+// TROCAR SENHA OBRIGATÓRIA
+// ═══════════════════════════════════════════════════════════════════════════════
+function TrocarSenha({dark,auth,fireUser,perfil,setPerfil,db,setAuthState,logout,saveUserProfile}) {
   const bg=dark?"#0f172a":"#f1f5f9"; const card=dark?"#1e293b":"#fff"; const text=dark?"#f1f5f9":"#0f172a"; const sub=dark?"#94a3b8":"#64748b"; const border=dark?"#334155":"#e2e8f0";
   const inp={background:dark?"#334155":"#f8fafc",border:`1.5px solid ${border}`,borderRadius:10,padding:"12px 14px",color:text,fontSize:15,width:"100%",outline:"none",boxSizing:"border-box",fontFamily:"inherit"};
   const lbl={fontSize:11,fontWeight:700,color:sub,marginBottom:5,display:"block",textTransform:"uppercase",letterSpacing:.7};
-  const [nova,setNova]=useState(""); const [confirma,setConfirma]=useState(""); const [erro,setErro]=useState("");
+  const [nova,setNova]=useState(""); const [confirma,setConfirma]=useState(""); const [erro,setErro]=useState(""); const [loading,setLoading]=useState(false);
 
-  const salvar=()=>{
-    const erros=validarSenha(nova);
-    if(erros.length>0){setErro(erros[0]);return;}
-    if(nova===usuario.passwordHash){setErro("A nova senha não pode ser igual à temporária.");return;}
-    if(nova!==confirma){setErro("As senhas não conferem.");return;}
-    setUsuarios(prev=>prev.map(u=>u.id===usuario.id?{...u,passwordHash:hashPassword(nova),mustChangePassword:false}:u));
+  const salvar = async () => {
+    const erros=validarSenha(nova); if(erros.length>0){setErro(erros[0]);return;} if(nova!==confirma){setErro("As senhas não conferem.");return;}
+    setLoading(true);
+    try {
+      await updatePassword(fireUser,nova);
+      const novoP={...perfil,mustChangePassword:false};
+      await saveUserProfile(fireUser.uid,novoP);
+      setPerfil(novoP);
+      setAuthState("app");
+    } catch(e) { setErro("Erro ao salvar senha. Tente novamente."); setLoading(false); }
   };
 
   return (
     <div style={{minHeight:"100vh",background:bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter','Segoe UI',system-ui,sans-serif"}}>
       <div style={{width:"100%",maxWidth:380}}>
         <div style={{textAlign:"center",marginBottom:24}}>
-          <div style={{width:56,height:56,borderRadius:16,background:"linear-gradient(135deg,#f59e0b,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}>
-            <Icon name="key" size={24} color="#fff"/>
-          </div>
+          <div style={{width:56,height:56,borderRadius:16,background:"linear-gradient(135deg,#f59e0b,#ef4444)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 12px"}}><Icon name="key" size={24} color="#fff"/></div>
           <div style={{fontSize:20,fontWeight:800,color:text}}>Altere sua senha</div>
           <div style={{fontSize:13,color:sub,marginTop:4}}>Por segurança, defina uma nova senha antes de continuar.</div>
         </div>
-
-        <div style={{background:card,borderRadius:20,padding:24,border:`1px solid ${border}`,boxShadow:"0 4px 24px rgba(0,0,0,.08)"}}>
-          <div style={{background:"#f59e0b15",border:"1px solid #f59e0b33",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#f59e0b",fontWeight:600,marginBottom:16}}>
-            🔐 Este é seu primeiro acesso. Crie uma senha pessoal para continuar.
-          </div>
+        <div style={{background:card,borderRadius:20,padding:24,border:`1px solid ${border}`}}>
+          <div style={{background:"#f59e0b15",border:"1px solid #f59e0b33",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#f59e0b",fontWeight:600,marginBottom:16}}>🔐 Primeiro acesso detectado. Crie uma senha pessoal.</div>
           <SenhaInput value={nova} onChange={e=>setNova(e.target.value)} label="Nova senha" lbl={lbl} style={inp}/>
           <ForcaSenhaBar pwd={nova}/>
           <div style={{fontSize:11,color:sub,marginBottom:12}}>
             {["Mínimo 8 caracteres","Pelo menos 1 letra","Pelo menos 1 número"].map(r=>(
-              <div key={r} style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
-                <div style={{width:6,height:6,borderRadius:3,background:sub}}/>
-                {r}
-              </div>
+              <div key={r} style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}><div style={{width:6,height:6,borderRadius:3,background:sub}}/>{r}</div>
             ))}
           </div>
           <SenhaInput value={confirma} onChange={e=>setConfirma(e.target.value)} label="Confirmar nova senha" lbl={lbl} style={inp}/>
           {erro&&<div style={{background:"#ef444415",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#ef4444",marginBottom:14}}>⚠️ {erro}</div>}
-          <button onClick={salvar} style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:700,cursor:"pointer",width:"100%",fontFamily:"inherit",marginBottom:12}}>
-            Salvar e Entrar
+          <button onClick={salvar} disabled={loading} style={{background:"linear-gradient(135deg,#6366f1,#8b5cf6)",color:"#fff",border:"none",borderRadius:12,padding:"14px",fontSize:15,fontWeight:700,cursor:"pointer",width:"100%",fontFamily:"inherit",marginBottom:12,opacity:loading?.7:1}}>
+            {loading?"Salvando...":"Salvar e Entrar"}
           </button>
           <button onClick={logout} style={{background:"none",border:"none",color:sub,fontSize:13,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>Sair</button>
         </div>
@@ -567,43 +469,28 @@ function Dashboard({S,C,proximoPagamento,historicoTotal,registrosComCalc,config,
   const totalExt=proximoPagamento.val50+proximoPagamento.val100;
   const dsr=totalExt*.1667;
   const projecao=sal+totalExt+dsr;
-
   const last8=[...registrosComCalc].slice(-8);
-  const chartData=Array.from({length:8},(_,i)=>{
-    const r=last8[i];
-    const inPeriod=r&&r.data>=proximoPagamento.inicio&&r.data<=proximoPagamento.fim;
-    const lbl=r?["D","S","T","Q","Q","S","S"][new Date(r.data+"T12:00:00").getDay()]:["D","S","T","Q","Q","S","S","D"][i];
-    return {label:lbl,value:r?.calc?(r.calc.extra50+r.calc.extra100)/60:0,highlight:inPeriod};
-  });
+  const chartData=Array.from({length:8},(_,i)=>{ const r=last8[i]; const inP=r&&r.data>=proximoPagamento.inicio&&r.data<=proximoPagamento.fim; const lbl=r?["D","S","T","Q","Q","S","S"][new Date(r.data+"T12:00:00").getDay()]:["D","S","T","Q","Q","S","S","D"][i]; return {label:lbl,value:r?.calc?(r.calc.extra50+r.calc.extra100)/60:0,highlight:inP}; });
 
   return (
     <div>
       <div style={{...S.card,background:`linear-gradient(135deg,${C.green}15,${C.green}05)`,border:`1.5px solid ${C.green}33`}}>
         <div style={{fontSize:10,color:C.green,fontWeight:700,letterSpacing:.5,marginBottom:10}}>📅 PREVISÃO — PRÓXIMO PAGAMENTO</div>
-        <div style={{fontSize:11,color:C.sub,marginBottom:12,background:C.green+"10",borderRadius:8,padding:"6px 10px"}}>
-          Período: <b>{fmtDateStr(proximoPagamento.inicio)}</b> a <b>{fmtDateStr(proximoPagamento.fim)}</b>
-        </div>
+        <div style={{fontSize:11,color:C.sub,marginBottom:12,background:C.green+"10",borderRadius:8,padding:"6px 10px"}}>Período: <b>{fmtDateStr(proximoPagamento.inicio)}</b> a <b>{fmtDateStr(proximoPagamento.fim)}</b></div>
         <div style={{display:"flex",gap:10,marginBottom:12}}>
-          <div style={{flex:1,background:C.card,borderRadius:12,padding:"10px 12px",border:`1px solid ${C.border}`}}>
-            <div style={{fontSize:10,color:C.sub,fontWeight:700}}>📈 Extras 50%</div>
-            <div style={{fontSize:20,fontWeight:800,color:C.yellow,marginTop:3}}>{minToHHMM(proximoPagamento.extra50)}</div>
-            <div style={{fontSize:12,color:C.sub,fontWeight:600,marginTop:1}}>{fmt(proximoPagamento.val50)}</div>
-          </div>
-          <div style={{flex:1,background:C.card,borderRadius:12,padding:"10px 12px",border:`1px solid ${C.border}`}}>
-            <div style={{fontSize:10,color:C.sub,fontWeight:700}}>🔥 Extras 100%</div>
-            <div style={{fontSize:20,fontWeight:800,color:C.red,marginTop:3}}>{minToHHMM(proximoPagamento.extra100)}</div>
-            <div style={{fontSize:12,color:C.sub,fontWeight:600,marginTop:1}}>{fmt(proximoPagamento.val100)}</div>
-          </div>
+          {[[C.yellow,"📈","Extras 50%",proximoPagamento.extra50,proximoPagamento.val50],[C.red,"🔥","Extras 100%",proximoPagamento.extra100,proximoPagamento.val100]].map(([cor,e,l,h,v])=>(
+            <div key={l} style={{flex:1,background:C.card,borderRadius:12,padding:"10px 12px",border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:10,color:C.sub,fontWeight:700}}>{e} {l}</div>
+              <div style={{fontSize:20,fontWeight:800,color:cor,marginTop:3}}>{minToHHMM(h)}</div>
+              <div style={{fontSize:12,color:C.sub,fontWeight:600,marginTop:1}}>{fmt(v)}</div>
+            </div>
+          ))}
         </div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",background:C.green+"18",borderRadius:10,padding:"10px 14px"}}>
-          <div>
-            <div style={{fontSize:11,color:C.green,fontWeight:700}}>💰 Valor previsto no contracheque</div>
-            <div style={{fontSize:10,color:C.sub,marginTop:1}}>Extras + DSR estimado ({fmt(dsr)})</div>
-          </div>
+          <div><div style={{fontSize:11,color:C.green,fontWeight:700}}>💰 Valor previsto no contracheque</div><div style={{fontSize:10,color:C.sub,marginTop:1}}>Extras + DSR estimado ({fmt(dsr)})</div></div>
           <div style={{fontSize:22,fontWeight:800,color:C.green}}>{fmt(totalExt+dsr)}</div>
         </div>
       </div>
-
       <div style={{...S.card,background:C.bg,border:`1.5px solid ${C.accent}33`}}>
         <div style={{fontSize:10,color:C.accent,fontWeight:700,letterSpacing:.5,marginBottom:10}}>💼 PROJEÇÃO DO SALÁRIO COMPLETO</div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:6}}>
@@ -615,29 +502,22 @@ function Dashboard({S,C,proximoPagamento,historicoTotal,registrosComCalc,config,
           ))}
         </div>
       </div>
-
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>📊 Horas extras por dia</div>
         <div style={{fontSize:10,color:C.sub,marginBottom:8}}>Verde = período do próximo pagamento</div>
         <BarChart data={chartData} textColor={C.sub}/>
       </div>
-
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>🔢 Reflexos Estimados</div>
         {[["DSR s/ extras",dsr,C.yellow],["Férias + 1/3",(sal+totalExt)/12*(4/3),C.green],["13º Salário",(sal+totalExt)/12,C.accent],["FGTS 8%",projecao*.08,C.purple]].map(([l,v,cor])=>(
           <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
-            <span style={{fontSize:13,color:C.sub}}>{l}</span>
-            <span style={{fontSize:14,fontWeight:700,color:cor}}>{fmt(v)}</span>
+            <span style={{fontSize:13,color:C.sub}}>{l}</span><span style={{fontSize:14,fontWeight:700,color:cor}}>{fmt(v)}</span>
           </div>
         ))}
       </div>
-
       <div style={{...S.card,cursor:"pointer"}} onClick={()=>setHistoricoAberto(!historicoAberto)}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <div>
-            <div style={{fontSize:13,fontWeight:700}}>📁 Histórico Total</div>
-            <div style={{fontSize:11,color:C.sub,marginTop:2}}>Todos os registros</div>
-          </div>
+          <div><div style={{fontSize:13,fontWeight:700}}>📁 Histórico Total</div><div style={{fontSize:11,color:C.sub,marginTop:2}}>Todos os registros</div></div>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:14,fontWeight:700,color:C.sub}}>{fmt(historicoTotal.val50+historicoTotal.val100)}</span>
             <div style={{transform:historicoAberto?"rotate(180deg)":"none",transition:"transform .3s"}}><Icon name="chevron" size={18} color={C.sub}/></div>
@@ -667,37 +547,22 @@ function Dashboard({S,C,proximoPagamento,historicoTotal,registrosComCalc,config,
 function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,minToHHMM,calcDay,isDomingo,isFeriadoNacional,jornadaSemanal,jornadaDiaria,DIAS_KEYS,DIAS_SEMANA,proximoPagamento}) {
   const today=new Date().toISOString().split("T")[0];
   const VAZIO={data:today,entrada:"",saida:"",intervalo:"60",obs:""};
-  const [form,setForm]=useState(VAZIO);
-  const [preview,setPreview]=useState(null);
-  const [editando,setEditando]=useState(null);
+  const [form,setForm]=useState(VAZIO); const [preview,setPreview]=useState(null); const [editando,setEditando]=useState(null);
 
-  const recalc=(f)=>{
-    const dt=new Date(f.data+"T12:00:00");
-    const isSp=isDomingo(dt)||isFeriadoNacional(dt)||feriados.includes(f.data);
-    const contrato=jornadaDiaria(jornadaSemanal[DIAS_KEYS[dt.getDay()]]);
-    const c=calcDay(f.entrada,f.saida,f.intervalo,contrato,valorHora,isSp);
-    setPreview(c?{...c,isSpecial:isSp,contrato}:null);
-  };
+  const recalc=(f)=>{ const dt=new Date(f.data+"T12:00:00"); const isSp=isDomingo(dt)||isFeriadoNacional(dt)||feriados.includes(f.data); const contrato=jornadaDiaria(jornadaSemanal[DIAS_KEYS[dt.getDay()]]); const c=calcDay(f.entrada,f.saida,f.intervalo,contrato,valorHora,isSp); setPreview(c?{...c,isSpecial:isSp,contrato}:null); };
+  const upd=(k,v)=>{ const nf={...form,[k]:v}; setForm(nf); recalc(nf); };
 
-  const upd=(k,v)=>{const nf={...form,[k]:v};setForm(nf);recalc(nf);};
-
-  const iniciarEdicao=(r)=>{
-    setForm({data:r.data,entrada:r.entrada,saida:r.saida,intervalo:r.intervalo||"60",obs:r.obs||""});
-    setEditando(r.data);
-    const dt=new Date(r.data+"T12:00:00");
-    const isSp=isDomingo(dt)||isFeriadoNacional(dt)||feriados.includes(r.data);
-    const contrato=jornadaDiaria(jornadaSemanal[DIAS_KEYS[dt.getDay()]]);
-    const c=calcDay(r.entrada,r.saida,r.intervalo,contrato,valorHora,isSp);
-    setPreview(c?{...c,isSpecial:isSp,contrato}:null);
-    window.scrollTo({top:0,behavior:"smooth"});
-  };
+  const iniciarEdicao=(r)=>{ setForm({data:r.data,entrada:r.entrada,saida:r.saida,intervalo:r.intervalo||"60",obs:r.obs||""}); setEditando(r.data); recalc({data:r.data,entrada:r.entrada,saida:r.saida,intervalo:r.intervalo||"60"}); window.scrollTo({top:0,behavior:"smooth"}); };
 
   const save=()=>{
     if(!form.entrada||!form.saida){alert("Preencha entrada e saída!");return;}
-    if(editando){setRegistros(registros.map(r=>r.data===editando?{...form}:r));setEditando(null);}
-    else{const idx=registros.findIndex(r=>r.data===form.data);if(idx>=0){const u=[...registros];u[idx]={...form};setRegistros(u);}else setRegistros([...registros,{...form}]);}
-    setForm(VAZIO);setPreview(null);
+    const rawRegistros = registros.map(r=>({data:r.data,entrada:r.entrada,saida:r.saida,intervalo:r.intervalo,obs:r.obs}));
+    if(editando){ setRegistros(rawRegistros.map(r=>r.data===editando?{...form}:r)); setEditando(null); }
+    else{ const idx=rawRegistros.findIndex(r=>r.data===form.data); if(idx>=0){const u=[...rawRegistros];u[idx]={...form};setRegistros(u);}else setRegistros([...rawRegistros,{...form}]); }
+    setForm(VAZIO); setPreview(null);
   };
+
+  const remove=(data)=>{ const raw=registros.map(r=>({data:r.data,entrada:r.entrada,saida:r.saida,intervalo:r.intervalo,obs:r.obs})); setRegistros(raw.filter(r=>r.data!==data)); };
 
   return (
     <div>
@@ -715,14 +580,8 @@ function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,min
           <div><label style={S.lbl}>Entrada</label><input type="time" value={form.entrada} onChange={e=>upd("entrada",e.target.value)} style={S.inp}/></div>
           <div><label style={S.lbl}>Saída</label><input type="time" value={form.saida} onChange={e=>upd("saida",e.target.value)} style={S.inp}/></div>
         </div>
-        <div style={{marginBottom:12}}>
-          <label style={S.lbl}>Intervalo (min)</label>
-          <input type="number" value={form.intervalo} onChange={e=>upd("intervalo",e.target.value)} style={S.inp}/>
-        </div>
-        <div style={{marginBottom:14}}>
-          <label style={S.lbl}>Observação</label>
-          <input type="text" value={form.obs} onChange={e=>upd("obs",e.target.value)} placeholder="Ex: extra autorizada" style={S.inp}/>
-        </div>
+        <div style={{marginBottom:12}}><label style={S.lbl}>Intervalo (min)</label><input type="number" value={form.intervalo} onChange={e=>upd("intervalo",e.target.value)} style={S.inp}/></div>
+        <div style={{marginBottom:14}}><label style={S.lbl}>Observação</label><input type="text" value={form.obs} onChange={e=>upd("obs",e.target.value)} placeholder="Ex: extra autorizada" style={S.inp}/></div>
         {preview&&(
           <div style={{background:C.bg,borderRadius:12,padding:14,marginBottom:14,border:`1px solid ${C.border}`}}>
             <div style={{fontSize:10,fontWeight:700,color:C.sub,letterSpacing:.5,marginBottom:10}}>PRÉ-VISUALIZAÇÃO</div>
@@ -730,10 +589,7 @@ function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,min
             {preview.alerteLimite&&<div style={{background:C.yellow+"15",color:C.yellow,borderRadius:8,padding:"7px 10px",fontSize:12,fontWeight:600,marginBottom:10}}>⚠️ Excedeu 2h extras. Verifique com seu gestor.</div>}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
               {[["⏳ Trabalhado",minToHHMM(preview.worked),C.text],["📌 Contrato",minToHHMM(preview.contrato),C.sub],["📈 Extra 50%",minToHHMM(preview.extra50),C.yellow],["🔥 Extra 100%",minToHHMM(preview.extra100),C.red]].map(([l,v,c])=>(
-                <div key={l} style={{background:C.card,borderRadius:8,padding:"9px 10px",border:`1px solid ${C.border}`}}>
-                  <div style={{fontSize:10,color:C.sub,fontWeight:600}}>{l}</div>
-                  <div style={{fontSize:16,fontWeight:700,color:c,marginTop:2}}>{v}</div>
-                </div>
+                <div key={l} style={{background:C.card,borderRadius:8,padding:"9px 10px",border:`1px solid ${C.border}`}}><div style={{fontSize:10,color:C.sub,fontWeight:600}}>{l}</div><div style={{fontSize:16,fontWeight:700,color:c,marginTop:2}}>{v}</div></div>
               ))}
             </div>
             {preview.delay>0&&<div style={{background:C.yellow+"15",borderRadius:8,padding:"7px 10px",fontSize:12,color:C.yellow,fontWeight:600,marginBottom:10}}>⏰ Atraso: {minToHHMM(preview.delay)}</div>}
@@ -745,15 +601,10 @@ function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,min
         )}
         <button onClick={save} style={S.btn}><Icon name="check" size={18} color="#fff"/>{editando?"Salvar Edição":"Salvar Registro"}</button>
       </div>
-
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,marginBottom:12}}>📋 Histórico ({registros.length})</div>
         {registros.length===0&&<div style={{textAlign:"center",padding:16,color:C.sub,fontSize:13}}>Sem registros.</div>}
         {[...registros].sort((a,b)=>b.data.localeCompare(a.data)).map((r,i)=>{
-          const dt=new Date(r.data+"T12:00:00");
-          const isSp=isDomingo(dt)||isFeriadoNacional(dt)||feriados.includes(r.data);
-          const contrato=jornadaDiaria(jornadaSemanal[DIAS_KEYS[dt.getDay()]]);
-          const c=calcDay(r.entrada,r.saida,r.intervalo,contrato,valorHora,isSp);
           const noPeriodo=r.data>=proximoPagamento.inicio&&r.data<=proximoPagamento.fim;
           return (
             <div key={i} style={{padding:"10px 0",borderBottom:`1px solid ${C.border}`}}>
@@ -762,24 +613,20 @@ function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,min
                   <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                     <span style={{fontSize:13,fontWeight:600}}>{fmtDateStr(r.data)}</span>
                     {noPeriodo&&<span style={{background:C.green+"22",color:C.green,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>Próx. pgto.</span>}
-                    {isSp&&<span style={{background:C.red+"22",color:C.red,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>FERIADO</span>}
-                    {c?.alerteLimite&&<span style={{background:C.yellow+"22",color:C.yellow,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>+2h</span>}
+                    {r.isSpecial&&<span style={{background:C.red+"22",color:C.red,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>FERIADO</span>}
+                    {r.calc?.alerteLimite&&<span style={{background:C.yellow+"22",color:C.yellow,borderRadius:5,padding:"1px 6px",fontSize:10,fontWeight:700}}>+2h</span>}
                   </div>
-                  <div style={{fontSize:11,color:C.sub,marginTop:1}}>{r.entrada} → {r.saida} · {minToHHMM(contrato)}</div>
+                  <div style={{fontSize:11,color:C.sub,marginTop:1}}>{r.entrada} → {r.saida} · {minToHHMM(r.contrato)}</div>
                   {r.obs&&<div style={{fontSize:11,color:C.sub,fontStyle:"italic"}}>"{r.obs}"</div>}
                 </div>
                 <div style={{textAlign:"right"}}>
-                  {c&&<div style={{fontSize:14,fontWeight:700,color:C.green}}>{fmt(c.total)}</div>}
-                  {c&&<div style={{fontSize:10,color:C.sub}}>{minToHHMM(c.extra50+c.extra100)} ext.</div>}
+                  {r.calc&&<div style={{fontSize:14,fontWeight:700,color:C.green}}>{fmt(r.calc.total)}</div>}
+                  {r.calc&&<div style={{fontSize:10,color:C.sub}}>{minToHHMM(r.calc.extra50+r.calc.extra100)} ext.</div>}
                 </div>
               </div>
               <div style={{display:"flex",gap:8,marginTop:8}}>
-                <button onClick={()=>iniciarEdicao(r)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"6px",cursor:"pointer",color:C.accent,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                  <Icon name="edit" size={13} color={C.accent}/> Editar
-                </button>
-                <button onClick={()=>setRegistros(registros.filter(x=>x.data!==r.data))} style={{flex:1,background:"none",border:`1px solid ${C.red}33`,borderRadius:8,padding:"6px",cursor:"pointer",color:C.red,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                  <Icon name="trash" size={13} color={C.red}/> Excluir
-                </button>
+                <button onClick={()=>iniciarEdicao(r)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"6px",cursor:"pointer",color:C.accent,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}><Icon name="edit" size={13} color={C.accent}/>Editar</button>
+                <button onClick={()=>remove(r.data)} style={{flex:1,background:"none",border:`1px solid ${C.red}33`,borderRadius:8,padding:"6px",cursor:"pointer",color:C.red,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}><Icon name="trash" size={13} color={C.red}/>Excluir</button>
               </div>
             </div>
           );
@@ -793,82 +640,41 @@ function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,min
 // RELATÓRIO
 // ═══════════════════════════════════════════════════════════════════════════════
 function Relatorio({S,C,registrosComCalc,proximoPagamento,config,valorHora,fmt,fmtDateStr,minToHHMM}) {
-  const sal=parseFloat(config.salario)||0;
-  const totalExt=proximoPagamento.val50+proximoPagamento.val100;
-  const dsr=totalExt*.1667;
+  const sal=parseFloat(config.salario)||0; const totalExt=proximoPagamento.val50+proximoPagamento.val100; const dsr=totalExt*.1667;
   const byMonth={};
-  registrosComCalc.forEach(r=>{
-    const m=r.data.substring(0,7);
-    if(!byMonth[m]) byMonth[m]={extra50:0,extra100:0,val50:0,val100:0,worked:0,days:0,alertas:0};
-    if(r.calc){byMonth[m].extra50+=r.calc.extra50;byMonth[m].extra100+=r.calc.extra100;byMonth[m].val50+=r.calc.val50;byMonth[m].val100+=r.calc.val100;byMonth[m].worked+=r.calc.worked;byMonth[m].days++;if(r.calc.alerteLimite)byMonth[m].alertas++;}
-  });
+  registrosComCalc.forEach(r=>{ const m=r.data.substring(0,7); if(!byMonth[m])byMonth[m]={extra50:0,extra100:0,val50:0,val100:0,worked:0,days:0,alertas:0}; if(r.calc){byMonth[m].extra50+=r.calc.extra50;byMonth[m].extra100+=r.calc.extra100;byMonth[m].val50+=r.calc.val50;byMonth[m].val100+=r.calc.val100;byMonth[m].worked+=r.calc.worked;byMonth[m].days++;if(r.calc.alerteLimite)byMonth[m].alertas++;} });
   const months=Object.entries(byMonth).sort((a,b)=>b[0].localeCompare(a[0]));
-
-  const exportTxt=()=>{
-    let t="===== RELATÓRIO HORA EXTRA PRO =====\n";
-    t+=`Data: ${new Date().toLocaleDateString("pt-BR")}\n`;
-    t+=`Salário Base: ${fmt(sal)} | Valor/hora: ${fmt(valorHora)}\n\n`;
-    t+=`===== PRÓXIMO PAGAMENTO (${fmtDateStr(proximoPagamento.inicio)} a ${fmtDateStr(proximoPagamento.fim)}) =====\n`;
-    t+=`Extras 50%: ${minToHHMM(proximoPagamento.extra50)} = ${fmt(proximoPagamento.val50)}\n`;
-    t+=`Extras 100%: ${minToHHMM(proximoPagamento.extra100)} = ${fmt(proximoPagamento.val100)}\n`;
-    t+=`DSR: ${fmt(dsr)} | TOTAL PREVISTO: ${fmt(totalExt+dsr)}\n\n`;
-    months.forEach(([m,d])=>{
-      t+=`\n${new Date(m+"-15").toLocaleDateString("pt-BR",{month:"long",year:"numeric"})}\n`;
-      t+=`  Dias: ${d.days} | E50: ${minToHHMM(d.extra50)} | E100: ${minToHHMM(d.extra100)}\n`;
-      t+=`  Valor: ${fmt(d.val50+d.val100)}${d.alertas>0?` | ⚠️ ${d.alertas} alerta(s)`:""}\n`;
-    });
-    const blob=new Blob([t],{type:"text/plain;charset=utf-8"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");a.href=url;a.download="relatorio_horas_extras.txt";a.click();
-    URL.revokeObjectURL(url);
-  };
+  const exportTxt=()=>{ let t="===== RELATÓRIO HORA EXTRA PRO =====\n"; t+=`Data: ${new Date().toLocaleDateString("pt-BR")}\nSalário: ${fmt(sal)} | Hora: ${fmt(valorHora)}\n\nPRÓXIMO PAGAMENTO (${fmtDateStr(proximoPagamento.inicio)} a ${fmtDateStr(proximoPagamento.fim)})\nExtras 50%: ${minToHHMM(proximoPagamento.extra50)} = ${fmt(proximoPagamento.val50)}\nExtras 100%: ${minToHHMM(proximoPagamento.extra100)} = ${fmt(proximoPagamento.val100)}\nDSR: ${fmt(dsr)} | TOTAL: ${fmt(totalExt+dsr)}\n`; months.forEach(([m,d])=>{t+=`\n${new Date(m+"-15").toLocaleDateString("pt-BR",{month:"long",year:"numeric"})}\n  Dias:${d.days} E50:${minToHHMM(d.extra50)} E100:${minToHHMM(d.extra100)} Valor:${fmt(d.val50+d.val100)}\n`;}); const blob=new Blob([t],{type:"text/plain;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a");a.href=url;a.download="relatorio.txt";a.click();URL.revokeObjectURL(url); };
 
   return (
     <div>
       <div style={{...S.card,background:`linear-gradient(135deg,${C.green}15,${C.green}05)`,border:`1.5px solid ${C.green}33`}}>
         <div style={{fontSize:10,color:C.green,fontWeight:700,letterSpacing:.5,marginBottom:6}}>💰 PRÓXIMO PAGAMENTO</div>
-        <div style={{fontSize:11,color:C.sub,marginBottom:10,background:C.green+"10",borderRadius:8,padding:"5px 10px"}}>
-          Período: <b>{fmtDateStr(proximoPagamento.inicio)}</b> a <b>{fmtDateStr(proximoPagamento.fim)}</b>
-        </div>
+        <div style={{fontSize:11,color:C.sub,marginBottom:10,background:C.green+"10",borderRadius:8,padding:"5px 10px"}}>Período: <b>{fmtDateStr(proximoPagamento.inicio)}</b> a <b>{fmtDateStr(proximoPagamento.fim)}</b></div>
         {[["📈 Extras 50%",minToHHMM(proximoPagamento.extra50),fmt(proximoPagamento.val50),C.yellow],["🔥 Extras 100%",minToHHMM(proximoPagamento.extra100),fmt(proximoPagamento.val100),C.red],["📅 DSR estimado","—",fmt(dsr),C.accent],["💰 VALOR PREVISTO",minToHHMM(proximoPagamento.extra50+proximoPagamento.extra100),fmt(totalExt+dsr),C.green]].map(([l,h,v,c],i)=>(
           <div key={l} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
-            <div>
-              <div style={{fontSize:i===3?14:13,fontWeight:i===3?700:500,color:i===3?c:C.text}}>{l}</div>
-              <div style={{fontSize:11,color:C.sub}}>{h}</div>
-            </div>
+            <div><div style={{fontSize:i===3?14:13,fontWeight:i===3?700:500,color:i===3?c:C.text}}>{l}</div><div style={{fontSize:11,color:C.sub}}>{h}</div></div>
             <span style={{fontSize:i===3?20:15,fontWeight:700,color:c}}>{v}</span>
           </div>
         ))}
       </div>
-
       {months.map(([m,d])=>(
         <div key={m} style={S.card}>
-          <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>
-            {new Date(m+"-15").toLocaleDateString("pt-BR",{month:"long",year:"numeric"}).replace(/^\w/,c=>c.toUpperCase())}
-            {d.alertas>0&&<span style={{background:C.yellow+"22",color:C.yellow,borderRadius:6,padding:"1px 8px",fontSize:11,fontWeight:700,marginLeft:8}}>⚠️ {d.alertas}</span>}
-          </div>
+          <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>{new Date(m+"-15").toLocaleDateString("pt-BR",{month:"long",year:"numeric"}).replace(/^\w/,c=>c.toUpperCase())}{d.alertas>0&&<span style={{background:C.yellow+"22",color:C.yellow,borderRadius:6,padding:"1px 8px",fontSize:11,fontWeight:700,marginLeft:8}}>⚠️ {d.alertas}</span>}</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
             {[["Dias",d.days+"d",C.text],["Total",minToHHMM(d.worked),C.text],["Extra 50%",fmt(d.val50),C.yellow],["Extra 100%",fmt(d.val100),C.red]].map(([l,v,c])=>(
-              <div key={l} style={{background:C.bg,borderRadius:10,padding:"9px 12px",border:`1px solid ${C.border}`}}>
-                <div style={{fontSize:10,color:C.sub,fontWeight:600}}>{l}</div>
-                <div style={{fontSize:14,fontWeight:700,color:c,marginTop:2}}>{v}</div>
-              </div>
+              <div key={l} style={{background:C.bg,borderRadius:10,padding:"9px 12px",border:`1px solid ${C.border}`}}><div style={{fontSize:10,color:C.sub,fontWeight:600}}>{l}</div><div style={{fontSize:14,fontWeight:700,color:c,marginTop:2}}>{v}</div></div>
             ))}
           </div>
-          <div style={{background:C.green+"15",borderRadius:10,padding:"9px 14px",display:"flex",justifyContent:"space-between"}}>
-            <span style={{fontSize:12,fontWeight:700,color:C.green}}>Total do mês</span>
-            <span style={{fontSize:18,fontWeight:800,color:C.green}}>{fmt(d.val50+d.val100)}</span>
-          </div>
+          <div style={{background:C.green+"15",borderRadius:10,padding:"9px 14px",display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,fontWeight:700,color:C.green}}>Total do mês</span><span style={{fontSize:18,fontWeight:800,color:C.green}}>{fmt(d.val50+d.val100)}</span></div>
         </div>
       ))}
-
       {months.length===0&&<div style={{...S.card,textAlign:"center",padding:32,color:C.sub}}><div style={{fontSize:36,marginBottom:8}}>📊</div>Sem dados.</div>}
-
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,marginBottom:12}}>📤 Exportar</div>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
           <button onClick={exportTxt} style={S.btn}>📄 Baixar Relatório (.txt)</button>
-          <button onClick={()=>{const msg=`*HORA EXTRA PRO — PRÓXIMO PAGAMENTO*\n\nPeríodo: ${fmtDateStr(proximoPagamento.inicio)} a ${fmtDateStr(proximoPagamento.fim)}\n\nExtras 50%: ${minToHHMM(proximoPagamento.extra50)} = ${fmt(proximoPagamento.val50)}\nExtras 100%: ${minToHHMM(proximoPagamento.extra100)} = ${fmt(proximoPagamento.val100)}\nDSR: ${fmt(dsr)}\n\n*💰 VALOR PREVISTO: ${fmt(totalExt+dsr)}*`;window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`,"_blank");}} style={{...S.btn,background:"linear-gradient(135deg,#25D366,#128C7E)"}}>📱 Compartilhar via WhatsApp</button>
+          <button onClick={()=>{const msg=`*HORA EXTRA PRO*\n\nPeríodo: ${fmtDateStr(proximoPagamento.inicio)} a ${fmtDateStr(proximoPagamento.fim)}\nExtras 50%: ${minToHHMM(proximoPagamento.extra50)} = ${fmt(proximoPagamento.val50)}\nExtras 100%: ${minToHHMM(proximoPagamento.extra100)} = ${fmt(proximoPagamento.val100)}\nDSR: ${fmt(dsr)}\n*💰 TOTAL: ${fmt(totalExt+dsr)}*`;window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`,"_blank");}} style={{...S.btn,background:"linear-gradient(135deg,#25D366,#128C7E)"}}>📱 Compartilhar via WhatsApp</button>
         </div>
       </div>
     </div>
@@ -886,17 +692,14 @@ function Config({S,C,config,setConfig,feriados,setFeriados,jornadaSemanal,jornad
   const diasAtivos=DIAS_KEYS.filter(k=>jornadaSemanal[k]?.ativo).length;
   const sal=(parseFloat(config.salario)||0)+(parseFloat(config.gratificacoes)||0);
   const vh=totalSemanMin>0?sal/((totalSemanMin*(52/12))/60):0;
-  const copiar=(dKey)=>{const f=jornadaSemanal[dKey];const n={...jornadaSemanal};DIAS_KEYS.forEach(k=>{if(k!==dKey)n[k]={...n[k],entrada:f.entrada,saida:f.saida,intervalo:f.intervalo};});setConfig({...config,jornadaSemanal:n});};
+  const copiar=(dKey)=>{ const f=jornadaSemanal[dKey]; const n={...jornadaSemanal}; DIAS_KEYS.forEach(k=>{if(k!==dKey)n[k]={...n[k],entrada:f.entrada,saida:f.saida,intervalo:f.intervalo};}); setConfig({...config,jornadaSemanal:n}); };
 
   return (
     <div>
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:14}}>💼 CADASTRO SALARIAL</div>
         {[["Salário Base (R$)","salario"],["Gratificações (R$)","gratificacoes"],["Adicionais Fixos (R$)","adicionais"]].map(([l,k])=>(
-          <div key={k} style={{marginBottom:12}}>
-            <label style={S.lbl}>{l}</label>
-            <input type="number" value={config[k]} onChange={e=>upd(k,e.target.value)} placeholder="0,00" style={S.inp}/>
-          </div>
+          <div key={k} style={{marginBottom:12}}><label style={S.lbl}>{l}</label><input type="number" value={config[k]} onChange={e=>upd(k,e.target.value)} placeholder="0,00" style={S.inp}/></div>
         ))}
         <div style={{background:C.green+"12",borderRadius:12,padding:14,border:`1.5px solid ${C.green}33`}}>
           <div style={{fontSize:10,color:C.sub,fontWeight:700,letterSpacing:.5}}>VALOR DA HORA</div>
@@ -904,49 +707,37 @@ function Config({S,C,config,setConfig,feriados,setFeriados,jornadaSemanal,jornad
           {vh>0&&<div style={{fontSize:12,color:C.yellow,marginTop:4,fontWeight:600}}>📈 50%: R$ {(vh*1.5).toFixed(2)}/h · 🔥 100%: R$ {(vh*2).toFixed(2)}/h</div>}
         </div>
       </div>
-
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:10}}>⏱️ JORNADA POR DIA</div>
         <div style={{marginBottom:12}}>
           <div style={{fontSize:11,color:C.sub,fontWeight:700,marginBottom:8}}>TEMPLATES</div>
-          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-            {Object.keys(TEMPLATES).map(t=><button key={t} onClick={()=>setConfig({...config,jornadaSemanal:TEMPLATES[t]})} style={{...S.pill(false),fontSize:11}}>{t}</button>)}
-          </div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:8}}>{Object.keys(TEMPLATES).map(t=><button key={t} onClick={()=>setConfig({...config,jornadaSemanal:TEMPLATES[t]})} style={{...S.pill(false),fontSize:11}}>{t}</button>)}</div>
         </div>
         <div style={{background:C.accent+"12",borderRadius:10,padding:"10px 14px",marginBottom:12,border:`1px solid ${C.accent}33`,display:"flex",justifyContent:"space-between"}}>
           <div><div style={{fontSize:10,color:C.sub,fontWeight:600}}>TOTAL/SEM</div><div style={{fontSize:16,fontWeight:800,color:C.accent}}>{minToHHMM(totalSemanMin)}</div></div>
           <div><div style={{fontSize:10,color:C.sub,fontWeight:600}}>DIAS ATIVOS</div><div style={{fontSize:16,fontWeight:800,color:C.accent}}>{diasAtivos}</div></div>
           <div><div style={{fontSize:10,color:C.sub,fontWeight:600}}>MÉDIA/DIA</div><div style={{fontSize:16,fontWeight:800,color:C.accent}}>{minToHHMM(diasAtivos>0?Math.round(totalSemanMin/diasAtivos):0)}</div></div>
         </div>
-        {DIAS_KEYS.map((dKey,i)=>{
-          const dia=jornadaSemanal[dKey]||{ativo:false,entrada:"08:00",saida:"17:00",intervalo:60};
-          const liq=jornadaDiaria(dia);
-          return (
-            <div key={dKey} style={{background:C.bg,borderRadius:12,padding:12,marginBottom:8,border:`1.5px solid ${dia.ativo?C.accent+"44":C.border}`,opacity:dia.ativo?1:0.6}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:dia.ativo?10:0}}>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <button onClick={()=>updJ(dKey,"ativo",!dia.ativo)} style={{width:40,height:22,borderRadius:11,background:dia.ativo?C.accent:C.border,border:"none",cursor:"pointer",position:"relative",transition:"background .2s"}}>
-                    <div style={{width:18,height:18,borderRadius:9,background:"#fff",position:"absolute",top:2,left:dia.ativo?20:2,transition:"left .2s"}}/>
-                  </button>
-                  <span style={{fontSize:14,fontWeight:700}}>{DIAS_SEMANA[i]}</span>
-                </div>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  {dia.ativo?<span style={{fontSize:12,fontWeight:700,color:C.green}}>{minToHHMM(liq)}</span>:<span style={{fontSize:12,color:C.sub}}>Folga</span>}
-                  {dia.ativo&&<button onClick={()=>copiar(dKey)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"3px 7px",cursor:"pointer",color:C.sub,fontSize:10,display:"flex",alignItems:"center",gap:3}}><Icon name="copy" size={11} color={C.sub}/>copiar</button>}
-                </div>
+        {DIAS_KEYS.map((dKey,i)=>{ const dia=jornadaSemanal[dKey]||{ativo:false,entrada:"08:00",saida:"17:00",intervalo:60}; const liq=jornadaDiaria(dia); return (
+          <div key={dKey} style={{background:C.bg,borderRadius:12,padding:12,marginBottom:8,border:`1.5px solid ${dia.ativo?C.accent+"44":C.border}`,opacity:dia.ativo?1:0.6}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:dia.ativo?10:0}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <button onClick={()=>updJ(dKey,"ativo",!dia.ativo)} style={{width:40,height:22,borderRadius:11,background:dia.ativo?C.accent:C.border,border:"none",cursor:"pointer",position:"relative",transition:"background .2s"}}><div style={{width:18,height:18,borderRadius:9,background:"#fff",position:"absolute",top:2,left:dia.ativo?20:2,transition:"left .2s"}}/></button>
+                <span style={{fontSize:14,fontWeight:700}}>{DIAS_SEMANA[i]}</span>
               </div>
-              {dia.ativo&&(
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 80px",gap:8}}>
-                  <div><div style={{fontSize:9,color:C.sub,fontWeight:700,marginBottom:4}}>ENTRADA</div><input type="time" value={dia.entrada} onChange={e=>updJ(dKey,"entrada",e.target.value)} style={{...S.inp,padding:"7px 10px",fontSize:13}}/></div>
-                  <div><div style={{fontSize:9,color:C.sub,fontWeight:700,marginBottom:4}}>SAÍDA</div><input type="time" value={dia.saida} onChange={e=>updJ(dKey,"saida",e.target.value)} style={{...S.inp,padding:"7px 10px",fontSize:13}}/></div>
-                  <div><div style={{fontSize:9,color:C.sub,fontWeight:700,marginBottom:4}}>INTERVALO</div><input type="number" value={dia.intervalo} onChange={e=>updJ(dKey,"intervalo",parseInt(e.target.value)||0)} style={{...S.inp,padding:"7px 10px",fontSize:13}}/></div>
-                </div>
-              )}
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                {dia.ativo?<span style={{fontSize:12,fontWeight:700,color:C.green}}>{minToHHMM(liq)}</span>:<span style={{fontSize:12,color:C.sub}}>Folga</span>}
+                {dia.ativo&&<button onClick={()=>copiar(dKey)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,padding:"3px 7px",cursor:"pointer",color:C.sub,fontSize:10,display:"flex",alignItems:"center",gap:3}}><Icon name="copy" size={11} color={C.sub}/>copiar</button>}
+              </div>
             </div>
-          );
-        })}
+            {dia.ativo&&(<div style={{display:"grid",gridTemplateColumns:"1fr 1fr 80px",gap:8}}>
+              <div><div style={{fontSize:9,color:C.sub,fontWeight:700,marginBottom:4}}>ENTRADA</div><input type="time" value={dia.entrada} onChange={e=>updJ(dKey,"entrada",e.target.value)} style={{...S.inp,padding:"7px 10px",fontSize:13}}/></div>
+              <div><div style={{fontSize:9,color:C.sub,fontWeight:700,marginBottom:4}}>SAÍDA</div><input type="time" value={dia.saida} onChange={e=>updJ(dKey,"saida",e.target.value)} style={{...S.inp,padding:"7px 10px",fontSize:13}}/></div>
+              <div><div style={{fontSize:9,color:C.sub,fontWeight:700,marginBottom:4}}>INTERVALO</div><input type="number" value={dia.intervalo} onChange={e=>updJ(dKey,"intervalo",parseInt(e.target.value)||0)} style={{...S.inp,padding:"7px 10px",fontSize:13}}/></div>
+            </div>)}
+          </div>
+        );})}
       </div>
-
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:14}}>📅 FECHAMENTO</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:12}}>
@@ -954,14 +745,11 @@ function Config({S,C,config,setConfig,feriados,setFeriados,jornadaSemanal,jornad
           <div><label style={S.lbl}>Extras fecham dia</label><input type="number" min="1" max="31" value={config.fechamentoExtras} onChange={e=>upd("fechamentoExtras",parseInt(e.target.value)||15)} style={S.inp}/></div>
         </div>
       </div>
-
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:6}}>🗓️ FERIADOS LOCAIS</div>
         <div style={{display:"flex",gap:8,marginBottom:12}}>
           <input type="date" value={novoF} onChange={e=>setNovoF(e.target.value)} style={{...S.inp,flex:1}}/>
-          <button onClick={()=>{if(novoF&&!feriados.includes(novoF)){setFeriados([...feriados,novoF]);setNovoF("");}}} style={{background:C.accent,border:"none",borderRadius:10,padding:"0 14px",cursor:"pointer",display:"flex",alignItems:"center",height:44}}>
-            <Icon name="plus" size={18} color="#fff"/>
-          </button>
+          <button onClick={()=>{if(novoF&&!feriados.includes(novoF)){setFeriados([...feriados,novoF]);setNovoF("");}}} style={{background:C.accent,border:"none",borderRadius:10,padding:"0 14px",cursor:"pointer",display:"flex",alignItems:"center",height:44}}><Icon name="plus" size={18} color="#fff"/></button>
         </div>
         {[...feriados].sort().map(d=>(
           <div key={d} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
@@ -977,56 +765,70 @@ function Config({S,C,config,setConfig,feriados,setFeriados,jornadaSemanal,jornad
 // ═══════════════════════════════════════════════════════════════════════════════
 // USUÁRIOS
 // ═══════════════════════════════════════════════════════════════════════════════
-function Usuarios({S,C,usuarios,setUsuarios}) {
-  const [view,setView]=useState("lista");
-  const [editId,setEditId]=useState(null);
-  const [form,setForm]=useState({nome:"",email:"",senha:"",perfil:"usuario",status:"ativo"});
-  const [filtro,setFiltro]=useState("");
-  const [resetando,setResetando]=useState(null);
-  const [novaSenhaReset,setNovaSenhaReset]=useState("");
-  const [erroForm,setErroForm]=useState("");
+function Usuarios({S,C,usuarios,setUsuarios,db,auth,saveUserProfile,perfil}) {
+  const [view,setView]=useState("lista"); const [editId,setEditId]=useState(null);
+  const [form,setForm]=useState({nome:"",email:"",senha:"",role:"usuario",status:"ativo"});
+  const [filtro,setFiltro]=useState(""); const [erroForm,setErroForm]=useState(""); const [loading,setLoading]=useState(false);
+  const [resetando,setResetando]=useState(null); const [novaSenhaReset,setNovaSenhaReset]=useState("");
   const upd=(k,v)=>setForm(f=>({...f,[k]:v}));
 
-  const save=()=>{
+  const recarregar = async () => { const snap=await getDocs(collection(db,"users")); setUsuarios(snap.docs.map(d=>({...d.data(),uid:d.id}))); };
+
+  const save = async () => {
     setErroForm("");
     if(!form.nome||!form.email){setErroForm("Nome e e-mail obrigatórios!");return;}
     if(!editId&&!form.senha){setErroForm("Informe a senha temporária.");return;}
     if(form.senha){const e=validarSenha(form.senha);if(e.length>0){setErroForm(e[0]);return;}}
-    if(editId){
-      setUsuarios(prev=>prev.map(u=>u.id===editId?{...u,nome:form.nome,email:form.email,perfil:form.perfil,status:form.status,...(form.senha?{passwordHash:hashPassword(form.senha),mustChangePassword:true}:{})}:u));
-    } else {
-      const emailExiste=usuarios.find(u=>u.email.toLowerCase()===form.email.toLowerCase());
-      if(emailExiste){setErroForm("E-mail já cadastrado.");return;}
-      setUsuarios(prev=>[...prev,{id:Date.now(),nome:form.nome,email:form.email,passwordHash:hashPassword(form.senha),perfil:form.perfil,status:form.status,mustChangePassword:true,createdAt:new Date().toISOString().split("T")[0],lastLoginAt:"—"}]);
+    setLoading(true);
+    try {
+      if(editId){
+        await saveUserProfile(editId,{nome:form.nome,email:form.email,role:form.role,status:form.status});
+        if(form.senha){
+          // Admin redefinindo senha via Firebase Admin SDK não é possível no client
+          // Marcamos mustChangePassword para o usuário trocar no próximo login
+          await saveUserProfile(editId,{mustChangePassword:true});
+        }
+      } else {
+        const {createUserWithEmailAndPassword} = await import("firebase/auth");
+        const secondAuth = getAuth(firebaseApp);
+        const cred = await createUserWithEmailAndPassword(secondAuth, form.email, form.senha);
+        await saveUserProfile(cred.user.uid,{nome:form.nome,email:form.email,role:form.role,status:form.status,mustChangePassword:true,createdAt:new Date().toISOString().split("T")[0],lastLoginAt:"—"});
+        // Inicializa dados padrão para o novo usuário
+        await setDoc(doc(db,"userData",cred.user.uid,"data","config"),{value:JSON.stringify({salario:"",gratificacoes:"",adicionais:"",fechamentoPonto:30,fechamentoExtras:15,escala:"5x2",jornadaSemanal:{dom:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60},seg:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},ter:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},qua:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},qui:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sex:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sab:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60}}})});
+      }
+      await recarregar();
+      setForm({nome:"",email:"",senha:"",role:"usuario",status:"ativo"});setEditId(null);setView("lista");
+    } catch(e) {
+      if(e.code==="auth/email-already-in-use") setErroForm("E-mail já cadastrado.");
+      else setErroForm("Erro: "+e.message);
     }
-    setForm({nome:"",email:"",senha:"",perfil:"usuario",status:"ativo"});setEditId(null);setView("lista");
+    setLoading(false);
   };
 
-  const editar=(u)=>{setForm({nome:u.nome,email:u.email,senha:"",perfil:u.perfil,status:u.status});setEditId(u.id);setErroForm("");setView("form");};
-  const excluir=(id)=>setUsuarios(prev=>prev.filter(u=>u.id!==id));
-  const toggleStatus=(id)=>setUsuarios(prev=>prev.map(u=>u.id===id?{...u,status:u.status==="ativo"?"inativo":"ativo"}:u));
+  const editar=(u)=>{ setForm({nome:u.nome,email:u.email,senha:"",role:u.role||"usuario",status:u.status||"ativo"}); setEditId(u.uid); setErroForm(""); setView("form"); };
+  const toggleStatus=async(u)=>{ await saveUserProfile(u.uid,{status:u.status==="ativo"?"inativo":"ativo"}); await recarregar(); };
 
-  const confirmarReset=()=>{
-    const e=validarSenha(novaSenhaReset);
-    if(e.length>0){alert(e[0]);return;}
-    setUsuarios(prev=>prev.map(u=>u.id===resetando?{...u,passwordHash:hashPassword(novaSenhaReset),mustChangePassword:true}:u));
-    setResetando(null);setNovaSenhaReset("");
-    alert("Senha redefinida! O usuário será obrigado a trocar no próximo login.");
+  const confirmarReset=async()=>{
+    const e=validarSenha(novaSenhaReset); if(e.length>0){alert(e[0]);return;}
+    await saveUserProfile(resetando,{mustChangePassword:true});
+    // Enviamos e-mail de redefinição via Firebase
+    try {
+      const u=usuarios.find(x=>x.uid===resetando);
+      if(u){const {sendPasswordResetEmail}=await import("firebase/auth"); await sendPasswordResetEmail(auth,u.email); alert(`E-mail de redefinição enviado para ${u.email}`);}
+    } catch(e){ alert("Erro ao enviar e-mail: "+e.message); }
+    setResetando(null); setNovaSenhaReset(""); await recarregar();
   };
 
-  const filtrados=usuarios.filter(u=>u.nome.toLowerCase().includes(filtro.toLowerCase())||u.email.toLowerCase().includes(filtro.toLowerCase()));
+  const filtrados=usuarios.filter(u=>u.nome?.toLowerCase().includes(filtro.toLowerCase())||u.email?.toLowerCase().includes(filtro.toLowerCase()));
 
-  // Modal reset
   if(resetando) return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999,padding:20}}>
       <div style={{background:C.card,borderRadius:20,padding:24,width:"100%",maxWidth:360,border:`1px solid ${C.border}`}}>
         <div style={{fontSize:15,fontWeight:700,marginBottom:4}}>🔑 Redefinir Senha</div>
-        <div style={{fontSize:12,color:C.sub,marginBottom:16}}>O usuário será obrigado a trocar no próximo login.</div>
-        <SenhaInput value={novaSenhaReset} onChange={e=>setNovaSenhaReset(e.target.value)} label="Nova senha temporária" lbl={S.lbl} style={S.inp}/>
-        <ForcaSenhaBar pwd={novaSenhaReset}/>
+        <div style={{fontSize:12,color:C.sub,marginBottom:16}}>Um e-mail de redefinição será enviado ao usuário.</div>
         <div style={{display:"flex",gap:10,marginTop:8}}>
           <button onClick={()=>{setResetando(null);setNovaSenhaReset("");}} style={{...S.btn,background:C.border,color:C.text,flex:1}}>Cancelar</button>
-          <button onClick={confirmarReset} style={{...S.btn,flex:2}}>Confirmar</button>
+          <button onClick={confirmarReset} style={{...S.btn,flex:2}}>Enviar E-mail</button>
         </div>
       </div>
     </div>
@@ -1037,17 +839,14 @@ function Usuarios({S,C,usuarios,setUsuarios}) {
       <div style={S.card}>
         <div style={{fontSize:13,fontWeight:700,color:C.accent,marginBottom:14}}>{editId?"✏️ EDITAR USUÁRIO":"👤 NOVO USUÁRIO"}</div>
         {[["Nome completo","nome","text"],["E-mail","email","email"]].map(([l,k,t])=>(
-          <div key={k} style={{marginBottom:12}}>
-            <label style={S.lbl}>{l}</label>
-            <input type={t} value={form[k]} onChange={e=>upd(k,e.target.value)} style={S.inp}/>
-          </div>
+          <div key={k} style={{marginBottom:12}}><label style={S.lbl}>{l}</label><input type={t} value={form[k]} onChange={e=>upd(k,e.target.value)} style={S.inp}/></div>
         ))}
-        <SenhaInput value={form.senha} onChange={e=>upd("senha",e.target.value)} label={editId?"Nova senha temporária (deixe vazio para não alterar)":"Senha temporária *"} lbl={S.lbl} style={S.inp}/>
+        <SenhaInput value={form.senha} onChange={e=>upd("senha",e.target.value)} label={editId?"Nova senha (opcional)":"Senha temporária *"} lbl={S.lbl} style={S.inp}/>
         {form.senha&&<ForcaSenhaBar pwd={form.senha}/>}
         <div style={{marginBottom:12}}>
           <label style={S.lbl}>Perfil</label>
           <div style={{display:"flex",gap:8}}>
-            {["admin","usuario"].map(p=><button key={p} onClick={()=>upd("perfil",p)} style={{...S.pill(form.perfil===p),flex:1}}>{p==="admin"?"🔑 Administrador":"👤 Usuário"}</button>)}
+            {["admin","usuario"].map(p=><button key={p} onClick={()=>upd("role",p)} style={{...S.pill(form.role===p),flex:1}}>{p==="admin"?"🔑 Administrador":"👤 Usuário"}</button>)}
           </div>
         </div>
         <div style={{marginBottom:16}}>
@@ -1057,12 +856,10 @@ function Usuarios({S,C,usuarios,setUsuarios}) {
           </div>
         </div>
         {erroForm&&<div style={{background:"#ef444415",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#ef4444",marginBottom:14}}>⚠️ {erroForm}</div>}
-        <div style={{fontSize:11,color:C.sub,marginBottom:14,background:C.yellow+"15",borderRadius:8,padding:"8px 12px"}}>
-          ℹ️ O usuário será obrigado a trocar a senha temporária no primeiro login.
-        </div>
+        {!editId&&<div style={{fontSize:11,color:C.sub,marginBottom:14,background:C.yellow+"15",borderRadius:8,padding:"8px 12px"}}>ℹ️ O usuário será obrigado a trocar a senha no primeiro login.</div>}
         <div style={{display:"flex",gap:10}}>
           <button onClick={()=>{setView("lista");setEditId(null);setErroForm("");}} style={{...S.btn,background:C.border,color:C.text,flex:1}}>Cancelar</button>
-          <button onClick={save} style={{...S.btn,flex:2}}><Icon name="check" size={18} color="#fff"/>Salvar</button>
+          <button onClick={save} disabled={loading} style={{...S.btn,flex:2,opacity:loading?.7:1}}><Icon name="check" size={18} color="#fff"/>{loading?"Salvando...":"Salvar"}</button>
         </div>
       </div>
     </div>
@@ -1073,24 +870,21 @@ function Usuarios({S,C,usuarios,setUsuarios}) {
       <div style={S.card}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <div style={{fontSize:13,fontWeight:700,color:C.accent}}>👥 USUÁRIOS ({usuarios.length})</div>
-          <button onClick={()=>{setForm({nome:"",email:"",senha:"",perfil:"usuario",status:"ativo"});setEditId(null);setErroForm("");setView("form");}} style={{background:C.accent,border:"none",borderRadius:10,padding:"8px 14px",cursor:"pointer",color:"#fff",fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
-            <Icon name="plus" size={15} color="#fff"/>Novo
-          </button>
+          <button onClick={()=>{setForm({nome:"",email:"",senha:"",role:"usuario",status:"ativo"});setEditId(null);setErroForm("");setView("form");}} style={{background:C.accent,border:"none",borderRadius:10,padding:"8px 14px",cursor:"pointer",color:"#fff",fontSize:13,fontWeight:700,display:"flex",alignItems:"center",gap:6}}><Icon name="plus" size={15} color="#fff"/>Novo</button>
         </div>
         <input type="text" value={filtro} onChange={e=>setFiltro(e.target.value)} placeholder="Buscar por nome ou e-mail..." style={{...S.inp,marginBottom:14}}/>
         <div style={{display:"flex",gap:8,marginBottom:14}}>
-          {[["Total",usuarios.length,C.accent],["Ativos",usuarios.filter(u=>u.status==="ativo").length,C.green],["Admins",usuarios.filter(u=>u.perfil==="admin").length,C.purple]].map(([l,v,c])=>(
+          {[["Total",usuarios.length,C.accent],["Ativos",usuarios.filter(u=>u.status==="ativo").length,C.green],["Admins",usuarios.filter(u=>u.role==="admin").length,C.purple]].map(([l,v,c])=>(
             <div key={l} style={{flex:1,background:c+"15",borderRadius:10,padding:"8px 10px",textAlign:"center",border:`1px solid ${c}33`}}>
-              <div style={{fontSize:18,fontWeight:800,color:c}}>{v}</div>
-              <div style={{fontSize:10,color:C.sub,fontWeight:600}}>{l}</div>
+              <div style={{fontSize:18,fontWeight:800,color:c}}>{v}</div><div style={{fontSize:10,color:C.sub,fontWeight:600}}>{l}</div>
             </div>
           ))}
         </div>
         {filtrados.map(u=>(
-          <div key={u.id} style={{background:C.bg,borderRadius:12,padding:12,marginBottom:10,border:`1.5px solid ${u.status==="ativo"?C.border:C.red+"33"}`}}>
+          <div key={u.uid} style={{background:C.bg,borderRadius:12,padding:12,marginBottom:10,border:`1.5px solid ${u.status==="ativo"?C.border:C.red+"33"}`}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <div style={{width:38,height:38,borderRadius:19,background:`linear-gradient(135deg,${C.accent},${C.purple})`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:15}}>{u.nome[0].toUpperCase()}</div>
+                <div style={{width:38,height:38,borderRadius:19,background:`linear-gradient(135deg,${C.accent},${C.purple})`,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:700,fontSize:15}}>{u.nome?u.nome[0].toUpperCase():"?"}</div>
                 <div>
                   <div style={{fontSize:14,fontWeight:700}}>{u.nome}</div>
                   <div style={{fontSize:11,color:C.sub}}>{u.email}</div>
@@ -1098,24 +892,15 @@ function Usuarios({S,C,usuarios,setUsuarios}) {
                 </div>
               </div>
               <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
-                <span style={{background:u.perfil==="admin"?C.purple+"22":C.accent+"22",color:u.perfil==="admin"?C.purple:C.accent,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>{u.perfil==="admin"?"🔑 Admin":"👤 Usuário"}</span>
+                <span style={{background:u.role==="admin"?C.purple+"22":C.accent+"22",color:u.role==="admin"?C.purple:C.accent,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>{u.role==="admin"?"🔑 Admin":"👤 Usuário"}</span>
                 <span style={{background:u.status==="ativo"?C.green+"22":C.red+"22",color:u.status==="ativo"?C.green:C.red,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>{u.status==="ativo"?"● Ativo":"● Inativo"}</span>
               </div>
             </div>
             <div style={{fontSize:10,color:C.sub,marginBottom:10}}>Criado: {u.createdAt} · Último acesso: {u.lastLoginAt}</div>
             <div style={{display:"flex",gap:6}}>
-              <button onClick={()=>editar(u)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"7px",cursor:"pointer",color:C.accent,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                <Icon name="edit" size={13} color={C.accent}/>Editar
-              </button>
-              <button onClick={()=>toggleStatus(u.id)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"7px",cursor:"pointer",color:u.status==="ativo"?C.red:C.green,fontSize:12,fontWeight:600}}>
-                {u.status==="ativo"?"🚫 Desativar":"✅ Ativar"}
-              </button>
-              <button onClick={()=>{setResetando(u.id);setNovaSenhaReset("");}} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"7px",cursor:"pointer",color:C.yellow,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                <Icon name="lock" size={13} color={C.yellow}/>Senha
-              </button>
-              {u.perfil!=="admin"&&<button onClick={()=>excluir(u.id)} style={{background:"none",border:`1px solid ${C.red}22`,borderRadius:8,padding:"7px 10px",cursor:"pointer",display:"flex",alignItems:"center"}}>
-                <Icon name="trash" size={14} color={C.red}/>
-              </button>}
+              <button onClick={()=>editar(u)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"7px",cursor:"pointer",color:C.accent,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}><Icon name="edit" size={13} color={C.accent}/>Editar</button>
+              <button onClick={()=>toggleStatus(u)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"7px",cursor:"pointer",color:u.status==="ativo"?C.red:C.green,fontSize:12,fontWeight:600}}>{u.status==="ativo"?"🚫 Desativar":"✅ Ativar"}</button>
+              {u.uid!==perfil?.uid&&<button onClick={()=>setResetando(u.uid)} style={{flex:1,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"7px",cursor:"pointer",color:C.yellow,fontSize:12,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"center",gap:4}}><Icon name="lock" size={13} color={C.yellow}/>Senha</button>}
             </div>
           </div>
         ))}
