@@ -48,6 +48,7 @@ const parseTime = (str) => { if(!str) return null; const [h,m]=str.split(":").ma
 const minToHHMM = (min) => { const s=min<0?"-":""; const a=Math.abs(min); return `${s}${String(Math.floor(a/60)).padStart(2,"0")}:${String(a%60).padStart(2,"0")}`; };
 const fmt = (n) => n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 const fmtDateStr = (dateStr) => { try { return new Date(dateStr+"T12:00:00").toLocaleDateString("pt-BR"); } catch { return dateStr; } };
+const localDateStr = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
 const jornadaDiaria = (dia) => { if(!dia||!dia.ativo) return 0; const e=parseTime(dia.entrada),s=parseTime(dia.saida); if(!e||!s) return 0; let d=s-e-(parseInt(dia.intervalo)||0); if(d<0) d+=24*60; return Math.max(0,d); };
 const calcDay = (entry,exit,interval,contractMin,valorHora,isSpecial) => {
   if(!entry||!exit) return null;
@@ -352,7 +353,7 @@ function LoginScreen({dark,setDark,auth,db,setAuthState,setPerfil,setFireUser,lo
         loadUserData(cred.user.uid,"feriados",[]),
       ]);
       setConfigState(cfg); setRegistrosState(regs); setFeriadosState(fers); setDataLoaded(true);
-      await setDoc(doc(db,"users",cred.user.uid),{lastLoginAt:new Date().toISOString().split("T")[0]},{merge:true});
+      await setDoc(doc(db,"users",cred.user.uid),{lastLoginAt:localDateStr()},{merge:true});
       if(p.mustChangePassword){ setAuthState("trocar"); } else { setAuthState("app"); }
     } catch(e) {
       setLoading(false);
@@ -546,7 +547,7 @@ function Dashboard({S,C,proximoPagamento,historicoTotal,registrosComCalc,config,
 // PONTO
 // ═══════════════════════════════════════════════════════════════════════════════
 function Ponto({S,C,registros,setRegistros,feriados,valorHora,fmt,fmtDateStr,minToHHMM,calcDay,isDomingo,isFeriadoNacional,jornadaSemanal,jornadaDiaria,DIAS_KEYS,DIAS_SEMANA,proximoPagamento}) {
-  const today=new Date().toISOString().split("T")[0];
+  const today=localDateStr();
   const VAZIO={data:today,entrada:"",saida:"",intervalo:"60",obs:""};
   const [form,setForm]=useState(VAZIO); const [preview,setPreview]=useState(null); const [editando,setEditando]=useState(null);
 
@@ -798,7 +799,7 @@ function Usuarios({S,C,usuarios,setUsuarios,db,auth,saveUserProfile,perfil}) {
         const auth2 = getAuth2(app2);
         const cred = await createUser(auth2, form.email, form.senha);
         await signOut(auth2);
-        await saveUserProfile(cred.user.uid,{nome:form.nome,email:form.email,role:form.role,status:form.status,mustChangePassword:true,createdAt:new Date().toISOString().split("T")[0],lastLoginAt:"—"});
+        await saveUserProfile(cred.user.uid,{nome:form.nome,email:form.email,role:form.role,status:form.status,mustChangePassword:true,createdAt:localDateStr(),lastLoginAt:"—"});
         // Inicializa dados padrão para o novo usuário
         await setDoc(doc(db,"userData",cred.user.uid,"data","config"),{value:JSON.stringify({salario:"",gratificacoes:"",adicionais:"",fechamentoPonto:30,fechamentoExtras:15,escala:"5x2",jornadaSemanal:{dom:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60},seg:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},ter:{ativo:true,entrada:"06:00",saida:"15:00",intervalo:60},qua:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},qui:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sex:{ativo:true,entrada:"06:00",saida:"14:00",intervalo:60},sab:{ativo:false,entrada:"06:00",saida:"14:00",intervalo:60}}})});
       }
